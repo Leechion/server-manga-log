@@ -11,6 +11,5 @@ if errorlevel 1 (
   exit /b 1
 )
 echo  正在开演……浏览器会自动打开，关闭本窗口即闭幕。
-set PORT_AUTOINCREMENT=1
 node server.js
 pause

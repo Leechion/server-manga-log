@@ -105,7 +105,7 @@ function currentTask() { return state.data.tasks.find((t) => t.id === state.curr
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'manga-log' },
     ...opts,
   });
   const body = await res.json().catch(() => ({}));
@@ -533,6 +533,10 @@ function renderStage() {
     renderImgStrip();
     renderFileStrip();
     renderTableEditors();
+    /* 表格输入即写回内存态。原先只在提交时 syncTablesFromDom，
+     * 导致自动同步重绘 DOM 时，正在输入的单元格内容会被旧值覆盖。 */
+    const tbEl = $('#tableEditors');
+    if (tbEl) tbEl.addEventListener('input', (ev) => { if (ev.target.dataset.tf) syncTablesFromDom(); });
     if (!state.editEntryId) form.querySelector('input[name="e-title"]')?.focus({ preventScroll: true });
   }
   if (state.editEntryId) $('#entryFormPanel')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -689,7 +693,7 @@ async function handleDocFiles(files) {
     if (formFiles.length >= 10) { toast('一格最多 10 个文档', '满！'); break; }
     try {
       const buf = await file.arrayBuffer();
-      const res = await fetch(`/api/upload/doc?name=${encodeURIComponent(file.name)}`, { method: 'POST', body: buf });
+      const res = await fetch(`/api/upload/doc?name=${encodeURIComponent(file.name)}`, { method: 'POST', headers: { 'X-Requested-With': 'manga-log' }, body: buf });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || `上传失败 (${res.status})`);
       formFiles.push({ id: genId('f'), url: body.url, name: body.name, size: body.size });
@@ -819,8 +823,19 @@ async function refresh(opts = {}) {
 }
 
 /* 自动同步：每 10 秒检测一次外部写入（如 import_history.py 录入），有变化就重绘并保留草稿 */
+function isUserTypingInStage() {
+  const el = document.activeElement;
+  if (!el) return false;
+  if (!/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return false;
+  const stage = $('#stage');
+  return !!(stage && stage.contains(el));
+}
 setInterval(async () => {
   try {
+    /* 用户正在格子里打字时，本轮跳过重绘：
+     * renderStage 会整块重建 #stage 的 DOM，任何未被 captureEntryDraft
+     * 覆盖的控件（尤其是表格单元格）都会丢输入。 */
+    if (isUserTypingInStage()) return;
     const fresh = await api('/api/data');
     if (JSON.stringify(fresh) === lastDataHash) return;
     await refresh({ preserve: true });
@@ -1234,7 +1249,7 @@ $('#taskForm').addEventListener('submit', onTaskSubmit);
 $('#btnNewTask').addEventListener('click', () => openTaskModal(null));
 $('#btnExport').addEventListener('click', exportMd);
 $('#btnLogout').addEventListener('click', async () => {
-  try { await fetch('/api/logout', { method: 'POST' }); } catch (_) { /* 忽略 */ }
+  try { await fetch('/api/logout', { method: 'POST', headers: { 'X-Requested-With': 'manga-log' } }); } catch (_) { /* 忽略 */ }
   location.href = '/';
 });
 $('#modal').addEventListener('click', (ev) => { if (ev.target === ev.currentTarget) closeTaskModal(); });

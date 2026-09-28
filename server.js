@@ -99,13 +99,65 @@ function loadData() {
     return fresh;
   }
 }
+/* 写盘采用「临时文件 + rename」保证原子性。
+ *
+ * 同时记录写盘时的 mtime：若发现 data.json 被本进程之外的写入改动过，
+ * 说明有别的程序（如 import_history.py）也在写同一个文件。此时**不静默合并**
+ * —— 合并无法区分「外部新增」与「本进程删除」，会把手动删掉的记录又复活。
+ * 改为：先备份外部版本，再以本进程内存为准落盘，并明确告警，把处置权交还用户。 */
+let lastMtimeMs = 0;
 function saveData(d) {
+  try {
+    const st = fs.statSync(DATA_FILE);
+    if (lastMtimeMs && st.mtimeMs !== lastMtimeMs) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const conflictPath = `${DATA_FILE}.conflict-${stamp}`;
+      try {
+        fs.copyFileSync(DATA_FILE, conflictPath);
+        console.warn('[!] 检测到 data.json 被其他程序改动过。');
+        console.warn(`    已把外部版本另存为 ${path.basename(conflictPath)}，本次以当前内存状态落盘。`);
+        console.warn('    若外部版本里有需要保留的记录，请用界面上的「⇒ 导入备份」导入该文件。');
+      } catch (e) {
+        console.warn('[!] 检测到外部改动，但备份失败：', e.message);
+      }
+    }
+  } catch (_) { /* 文件尚不存在（首次写入） */ }
   const tmp = `${DATA_FILE}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(d, null, 2), 'utf8');
   fs.renameSync(tmp, DATA_FILE);
+  try { lastMtimeMs = fs.statSync(DATA_FILE).mtimeMs; } catch (_) { lastMtimeMs = 0; }
 }
 
 let data = loadData();
+
+/* ---------------- 单实例锁 ----------------
+ * 数据全量驻留内存、saveData 整份覆盖写盘，两个实例并存必然互相覆盖丢数据。
+ * 用 PID 文件阻止第二个实例启动（.gitignore 里已忽略 server.pid）。 */
+const LOCK_FILE = path.join(ROOT, 'server.pid');
+function acquireLock() {
+  try {
+    if (fs.existsSync(LOCK_FILE)) {
+      const oldPid = Number(String(fs.readFileSync(LOCK_FILE, 'utf8')).trim());
+      if (Number.isFinite(oldPid) && oldPid > 0 && oldPid !== process.pid) {
+        try {
+          process.kill(oldPid, 0); // 信号 0：只探测进程是否存在
+          console.error(`[x] 已有实例在运行（PID ${oldPid}）。`);
+          console.error('    同时开两个实例会互相覆盖 data.json 导致记录丢失，已拒绝启动。');
+          console.error('    若确认没有实例在跑，删除 server.pid 后重试。');
+          process.exit(1);
+        } catch (_) { /* 陈旧锁（进程已不存在），继续覆盖 */ }
+      }
+    }
+    fs.writeFileSync(LOCK_FILE, String(process.pid), 'utf8');
+    const release = () => { try { fs.unlinkSync(LOCK_FILE); } catch (_) {} };
+    process.on('exit', release);
+    process.on('SIGINT', () => { release(); process.exit(0); });
+    process.on('SIGTERM', () => { release(); process.exit(0); });
+  } catch (e) {
+    console.warn('[!] 无法创建实例锁（不影响启动）：', e.message);
+  }
+}
+acquireLock();
 
 /* ---------------- 工具 ---------------- */
 const S = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
@@ -180,6 +232,11 @@ function removeUploads(urls) {
     try { fs.unlinkSync(path.join(UPLOAD_DIR, path.basename(u))); } catch (_) { /* 文件可能已不在 */ }
   }
 }
+/* 旧 URL 列表中已被新列表抛弃的那些（差集），用于安全删除附件 */
+function orphansOf(oldUrls, newItems) {
+  const kept = new Set((newItems || []).map((x) => x.url));
+  return (oldUrls || []).filter((u) => !kept.has(u));
+}
 function normalizeEntry(body) {
   const title = S(body.title, 120);
   if (!title) return { error: '改动标题不能为空' };
@@ -198,9 +255,38 @@ function normalizeEntry(body) {
   };
 }
 
+/* 统一安全响应头：防点击劫持（iframe 套壳骗点「撕掉」）、防 MIME 嗅探、限制外链引用 */
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer',
+};
+
+/* 真实客户端 IP：隧道场景下 socket 地址恒为 127.0.0.1，
+ * 必须优先取 Cloudflare 注入的 CF-Connecting-IP，其次 X-Forwarded-For。
+ * 登录失败计数与内网判定都必须走这里，否则公网访客会共用同一个计数桶。 */
+function clientIp(req) {
+  const cf = req.headers['cf-connecting-ip'];
+  if (cf) return String(cf).trim();
+  const xff = req.headers['x-forwarded-for'];
+  if (xff) return String(xff).split(',')[0].trim();
+  return req.socket.remoteAddress || '?';
+}
+
+/* 常量时间字符串比较，避免口令比对的时序侧信道 */
+function safeEqual(a, b) {
+  const ba = Buffer.from(String(a), 'utf8');
+  const bb = Buffer.from(String(b), 'utf8');
+  if (ba.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ba, bb);
+}
+
 /* ---------------- 口令锁（设置了 ACCESS_CODE 才启用） ---------------- */
+/* 每次启动生成随机盐：token 不再只是口令的纯函数，
+ * 重启即让所有旧会话失效（改口令同样全端下线）。 */
+const AUTH_SALT = crypto.randomBytes(16).toString('hex');
 const AUTH_TOKEN = ACCESS_CODE
-  ? crypto.createHash('sha256').update(`manga-log::${ACCESS_CODE}`).digest('hex')
+  ? crypto.createHash('sha256').update(`manga-log::${AUTH_SALT}::${ACCESS_CODE}`).digest('hex')
   : '';
 function getCookie(req, key) {
   for (const part of String(req.headers.cookie || '').split(';')) {
@@ -233,9 +319,7 @@ function isPrivateIp(ip) {
   return false;
 }
 function isLanRequest(req) {
-  const cf = req.headers['cf-connecting-ip'];
-  const ip = cf ? String(cf).trim() : (req.socket.remoteAddress || '');
-  return isPrivateIp(ip);
+  return isPrivateIp(clientIp(req));
 }
 const loginFails = new Map();
 function failRecord(ip) {
@@ -263,7 +347,7 @@ document.getElementById('f').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const msg = document.getElementById('msg');
   try {
-    const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: document.getElementById('code').value }) });
+    const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'manga-log' }, body: JSON.stringify({ code: document.getElementById('code').value }) });
     const b = await r.json().catch(() => ({}));
     if (r.ok) { location.href = '/'; return; }
     msg.textContent = b.error || '口令不对';
@@ -368,9 +452,18 @@ const routes = [
     if (body.kind !== undefined && KINDS.includes(body.kind)) entry.kind = body.kind;
     if (body.result !== undefined && RESULTS.includes(body.result)) entry.result = body.result;
     if (body.detail !== undefined) entry.detail = S(body.detail, 5000);
-    if (body.images !== undefined) entry.images = normalizeImages(body.images);
+    /* 附件做差集清理：只删被换掉/移除的旧文件，避免 uploads/ 无限膨胀 */
+    if (body.images !== undefined) {
+      const old = (entry.images || []).map((x) => x.url);
+      entry.images = normalizeImages(body.images);
+      removeUploads(orphansOf(old, entry.images));
+    }
     if (body.tables !== undefined) entry.tables = normalizeTables(body.tables);
-    if (body.files !== undefined) entry.files = normalizeFiles(body.files);
+    if (body.files !== undefined) {
+      const old = (entry.files || []).map((x) => x.url);
+      entry.files = normalizeFiles(body.files);
+      removeUploads(orphansOf(old, entry.files));
+    }
     task.updatedAt = stampLocal(0, `${pad(new Date().getHours())}:${pad(new Date().getMinutes())}`);
     saveData(data);
     return json(res, 200, { ok: true, task });
@@ -426,7 +519,11 @@ const routes = [
 
 function json(res, code, obj) {
   const payload = JSON.stringify(obj);
-  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.writeHead(code, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    ...SECURITY_HEADERS,
+  });
   res.end(payload);
 }
 
@@ -518,6 +615,7 @@ function serveStatic(req, res, pathname) {
     const headers = {
       'Content-Type': MIME[ext] || 'application/octet-stream',
       'Cache-Control': 'no-store',
+      ...SECURITY_HEADERS,
     };
     // 上传的文件：图片允许内联显示，其余一律作为下载附件（防止 .html 等在本页内执行）
     if (isUpload) {
@@ -546,12 +644,12 @@ async function handler(req, res) {
   try {
     /* 口令锁：设置了 ACCESS_CODE 时，公网来源要求登录；内网直连免口令 */
     if (ACCESS_CODE && !isLanRequest(req)) {
-      const ip = req.socket.remoteAddress || '?';
+      const ip = clientIp(req);
       if (pathname === '/api/login' && req.method.toUpperCase() === 'POST') {
         let body = {};
         try { body = await readBody(req, 4096); } catch (_) { body = {}; }
         if (failRecord(ip).n >= 20) return json(res, 429, { error: '错太多次了，休息 5 分钟再来' });
-        if (String(body.code || '').trim() === ACCESS_CODE) {
+        if (safeEqual(String(body.code || '').trim(), ACCESS_CODE)) {
           loginFails.delete(ip);
           res.writeHead(200, {
             'Content-Type': 'application/json; charset=utf-8',
@@ -584,6 +682,28 @@ async function handler(req, res) {
     }
     if (pathname.startsWith('/api/')) {
       const method = req.method.toUpperCase();
+      /* ---- CSRF 防护 ----
+       * 浏览器对 application/json 的跨站请求会先发 preflight，因而天然挡住；
+       * 但 text/plain、application/x-www-form-urlencoded、multipart/form-data
+       * 属于「简单请求」，跨站时不经 preflight 直达服务端。
+       * 因此写操作强制要求自定义头 X-Requested-With：
+       * 自定义头必定触发 preflight，未授权的跨站 preflight 会被浏览器拒绝。
+       * 另外，带请求体的方法还要求 JSON Content-Type，
+       * 以免 text/plain 之类的简单请求体被当作 JSON 解析。
+       * DELETE 通常无请求体，故只校验自定义头。 */
+      if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(method)) {
+        if (req.headers['x-requested-with'] !== 'manga-log') {
+          return json(res, 403, { error: '跨站请求已拒绝' });
+        }
+        const hasBody = method !== 'DELETE';
+        const isDocUpload = pathname === '/api/upload/doc';
+        if (hasBody && !isDocUpload) {
+          const ct = String(req.headers['content-type'] || '');
+          if (!ct.includes('application/json')) {
+            return json(res, 415, { error: '仅接受 application/json 请求' });
+          }
+        }
+      }
       for (const [m, re, fn] of routes) {
         if (m !== method) continue;
         const match = pathname.match(re);

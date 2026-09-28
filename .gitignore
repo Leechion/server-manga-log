@@ -1,0 +1,17 @@
+# 隐私与数据（绝不入库）
+data.json
+data.json.*
+uploads/
+config.json
+manga_code.txt
+import_history.py
+sync-uploads.sh
+sync-uploads.cmd
+manga.log
+tunnel.log
+server.pid
+*.log
+node_modules/
+.DS_Store
+__pycache__/
+*.pyc

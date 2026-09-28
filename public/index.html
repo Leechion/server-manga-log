@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>服务器改动 · 漫画志</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='2' width='28' height='28' rx='6' fill='%23161513'/%3E%3Ctext x='16' y='23' font-size='18' text-anchor='middle' fill='%23f6f2e8' font-family='KaiTi,serif' font-weight='bold'%3E记%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<!-- 手绘抖动线条滤镜 -->
+<svg class="defs" width="0" height="0" aria-hidden="true" focusable="false">
+  <filter id="roughen">
+    <feTurbulence type="fractalNoise" baseFrequency="0.05" numOctaves="3" result="n" seed="7"/>
+    <feDisplacementMap in="SourceGraphic" in2="n" scale="2.6"/>
+  </filter>
+  <filter id="roughen-soft">
+    <feTurbulence type="fractalNoise" baseFrequency="0.04" numOctaves="2" result="n" seed="3"/>
+    <feDisplacementMap in="SourceGraphic" in2="n" scale="1.6"/>
+  </filter>
+</svg>
+
+<div id="app">
+  <span class="crop tl" aria-hidden="true"></span><span class="crop tr" aria-hidden="true"></span>
+  <span class="crop bl" aria-hidden="true"></span><span class="crop br" aria-hidden="true"></span>
+
+  <header class="hero">
+    <div class="hero-main">
+      <div class="serial-stamp roughen" aria-hidden="true">連載中</div>
+      <h1 class="title"><span class="ch">服</span><span class="ch">务</span><span class="ch">器</span><span class="ch">改</span><span class="ch">动</span><span class="sep">·</span><span class="ch">漫</span><span class="ch">画</span><span class="ch">志</span></h1>
+      <p class="subtitle"><span class="mono">SERVER MANGA LOG</span> — 每一次改动，都画进一格漫画</p>
+    </div>
+    <div class="obi" aria-hidden="true">每一格改动・都是一页手稿</div>
+    <div class="hero-dots" aria-hidden="true"></div>
+  </header>
+
+  <div class="ticker mono">
+    <span id="statVol">…</span><span class="dot">●</span>
+    <span id="statPanel">…</span><span class="dot">●</span>
+    <span id="statWeek">…</span><span class="dot">●</span>
+    <span id="statTodo">…</span>
+    <span class="flex"></span>
+    <button id="btnExport" class="btn-tiny rs" title="把全部记录导出为 Markdown">⇩ 导出全稿</button>
+    <span class="barcode" aria-hidden="true"></span>
+  </div>
+
+  <form id="quickForm" class="quickbar" title="快记一笔：写入所选的话，类型按关键词自动识别">
+    <span class="qb-sfx" aria-hidden="true">⚡</span>
+    <input id="quickInput" class="qb-input" type="text" maxlength="120" autocomplete="off" placeholder="快记一笔：一句话改动，回车入格…">
+    <span id="quickKind" class="qb-kind">将记为：其他</span>
+    <select id="quickTask" class="qb-select" title="记到哪一话"></select>
+    <button type="submit" class="btn-tiny rs">记！</button>
+  </form>
+
+  <div class="columns">
+    <aside class="toc">
+      <div class="toc-head">
+        <button id="tabToc" class="vtab active" type="button">目次</button>
+        <button id="tabStats" class="vtab" type="button">卷末统计</button>
+        <span class="en mono" id="tocEn">CONTENTS</span>
+      </div>
+      <div id="statusChips" class="chip-row"></div>
+      <div class="search-row">
+        <input id="search" class="ipt rs" type="text" placeholder="⌕ 搜索改动 / 主机 / 标签…" autocomplete="off">
+      </div>
+      <nav id="taskList" class="task-list" aria-label="任务目次"></nav>
+      <button id="btnNewTask" class="btn add-task rs">＋ 开新话</button>
+    </aside>
+    <main id="stage" class="stage"></main>
+  </div>
+
+  <footer class="colophon">—— 手稿化完成 · <span class="mono">SERVER MANGA LOG</span> · 数据在本地 data.json ——
+    <button id="btnLogout" class="btn-tiny rs" title="口令锁模式下退出登录" style="margin-left:10px;">⎋ 退场</button>
+  </footer>
+</div>
+
+<!-- 新建 / 编辑任务 -->
+<div id="modal" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+  <div class="modal r2">
+    <h3 id="modalTitle" class="modal-title">新的一话</h3>
+    <form id="taskForm">
+      <label class="lb">话数标题 <em>*</em>
+        <input class="ipt rs" name="title" type="text" maxlength="120" placeholder="如：Nginx 证书更换" required>
+      </label>
+      <div class="frow">
+        <label class="lb">服务器 / 主机
+          <input class="ipt rs" name="host" type="text" maxlength="80" placeholder="如 prod-web-01">
+        </label>
+        <label class="lb">状态
+          <select class="ipt rs" name="status">
+            <option>进行中</option><option>已完成</option><option>搁置</option>
+          </select>
+        </label>
+      </div>
+      <label class="lb">标签
+        <input class="ipt rs" name="tags" type="text" placeholder="逗号分隔：运维, 安全">
+      </label>
+      <label class="lb">备注
+        <textarea class="ipt rs" name="note" rows="3" maxlength="1000" placeholder="背景、目标、遗留事项…"></textarea>
+      </label>
+      <div class="form-foot">
+        <span class="hint mono">ESC 取消</span>
+        <button type="button" class="btn rs" data-action="close-modal">先不了</button>
+        <button type="submit" class="btn primary rs roughen">开演！</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden" aria-live="polite"></div>
+<div id="lightbox" class="lightbox hidden" title="点击任意处关闭">
+  <img id="lightboxImg" alt="查看大图">
+</div>
+<div id="filePreview" class="overlay hidden" role="dialog" aria-modal="true" aria-label="文件预览">
+  <div class="modal preview-modal r2">
+    <div class="pv-head">
+      <span class="pv-icon" aria-hidden="true">📄</span>
+      <span class="pv-name" id="pvName"></span>
+      <span class="pv-size mono" id="pvSize"></span>
+      <span class="flex"></span>
+      <a id="pvDownload" class="btn rs" download title="下载原文件">⇩ 下载</a>
+      <button id="pvClose" class="btn-icon" title="关闭预览 (Esc)">✕</button>
+    </div>
+    <div id="pvBody" class="pv-body"><div class="pv-note">读取中…</div></div>
+  </div>
+</div>
+<input type="file" id="importFile" accept=".json,application/json" class="hidden">
+<script src="/app.js"></script>
+</body>
+</html>

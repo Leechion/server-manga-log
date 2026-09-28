@@ -1,0 +1,28 @@
+# 漫画志 systemd 服务（Linux 服务器开机自启、崩溃自动拉起）
+# 用法：
+#   1. 把整个 server-manga-log 目录放到服务器，比如 /opt/server-manga-log
+#   2. 修改下面 WorkingDirectory 与 Environment=ACCESS_CODE=（务必改口令！）
+#   3. sudo cp manga-log.service /etc/systemd/system/
+#      sudo systemctl daemon-reload
+#      sudo systemctl enable --now manga-log
+#   4. 看日志：journalctl -u manga-log -f
+
+[Unit]
+Description=Server Manga Log (服务器改动·漫画志)
+After=network.target
+
+[Service]
+Type=simple
+# ★ 改成你的实际目录
+WorkingDirectory=/opt/server-manga-log
+ExecStart=/usr/bin/node server.js
+# ★ 0.0.0.0 = 允许外部访问；只在内网用就改成 127.0.0.1
+Environment=HOST=0.0.0.0
+Environment=PORT=4780
+# ★★ 必改：外网访问一定要设口令，否则谁都能改你的记录！
+Environment=ACCESS_CODE=change-me-please
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

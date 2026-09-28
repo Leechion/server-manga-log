@@ -14,6 +14,8 @@ const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const DATA_FILE = path.join(ROOT, 'data.json');
 const UPLOAD_DIR = path.join(ROOT, 'uploads');
+const SNAPSHOT_DIR = path.join(ROOT, '.backups');
+const SNAPSHOT_LIMIT = 40;
 
 /* 可选 config.json：{ "accessCode": "口令", "host": "0.0.0.0", "port": 4780 }（环境变量优先） */
 function loadConfig() {
@@ -45,10 +47,7 @@ function uid(prefix) {
 
 function seedData() {
   const t = (offset, hhmm) => stampLocal(offset, hhmm);
-  return {
-    version: 1,
-    seededAt: new Date().toISOString(),
-    tasks: [
+  const tasks = [
       {
         id: uid('t'), title: 'Nginx HTTPS 证书更换', host: 'prod-web-01',
         status: '进行中', tags: ['运维', '安全'], note: '证书 10-08 到期，续期后留意子域。',
@@ -80,15 +79,44 @@ function seedData() {
           { id: uid('e'), time: t(0, '09:30'), kind: '排查', title: '慢日志出现 2 条慢查询', detail: '集中在 orders_refund 表，考虑补 (user_id, created_at) 索引。', result: '待验证' },
         ],
       },
-    ],
+  ];
+  return {
+    version: 2,
+    seededAt: new Date().toISOString(),
+    activeMangaId: 'm_legacy',
+    mangas: [{ id: 'm_legacy', title: '服务器改动', createdAt: new Date().toISOString(), tasks }],
   };
 }
 
+function normalizeStoredData(parsed) {
+  if (parsed && Array.isArray(parsed.mangas) && parsed.mangas.length) {
+    const mangas = parsed.mangas.map((m, i) => ({
+      id: (m && typeof m.id === 'string' && /^m_[\w-]+$/.test(m.id)) ? m.id : `m_${i + 1}`,
+      title: (m && typeof m.title === 'string' ? m.title.trim().slice(0, 80) : '') || `漫画 ${i + 1}`,
+      createdAt: (m && typeof m.createdAt === 'string' ? m.createdAt.slice(0, 40) : '') || new Date().toISOString(),
+      tasks: Array.isArray(m && m.tasks) ? m.tasks : [],
+    }));
+    const activeMangaId = mangas.some((m) => m.id === parsed.activeMangaId) ? parsed.activeMangaId : mangas[0].id;
+    return { version: 2, seededAt: parsed.seededAt || new Date().toISOString(), activeMangaId, mangas };
+  }
+  if (parsed && Array.isArray(parsed.tasks)) {
+    return {
+      version: 2,
+      seededAt: parsed.seededAt || new Date().toISOString(),
+      activeMangaId: 'm_legacy',
+      mangas: [{ id: 'm_legacy', title: '服务器改动', createdAt: parsed.seededAt || new Date().toISOString(), tasks: parsed.tasks }],
+    };
+  }
+  throw new Error('bad shape');
+}
+function allTasksOf(store) {
+  if (store && Array.isArray(store.mangas)) return store.mangas.flatMap((m) => Array.isArray(m.tasks) ? m.tasks : []);
+  return store && Array.isArray(store.tasks) ? store.tasks : [];
+}
 function loadData() {
   try {
     const parsed = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-    if (parsed && Array.isArray(parsed.tasks)) return parsed;
-    throw new Error('bad shape');
+    return normalizeStoredData(parsed);
   } catch (e) {
     if (fs.existsSync(DATA_FILE)) {
       try { fs.renameSync(DATA_FILE, `${DATA_FILE}.bak-${Date.now()}`); } catch (_) { /* 忽略备份失败 */ }
@@ -109,11 +137,13 @@ let lastMtimeMs = 0;
 function saveData(d) {
   try {
     const st = fs.statSync(DATA_FILE);
+    if (!hasSnapshotForDay(dayStr())) createSnapshot('daily');
     if (lastMtimeMs && st.mtimeMs !== lastMtimeMs) {
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const conflictPath = `${DATA_FILE}.conflict-${stamp}`;
       try {
         fs.copyFileSync(DATA_FILE, conflictPath);
+        createSnapshot('external-edit');
         console.warn('[!] 检测到 data.json 被其他程序改动过。');
         console.warn(`    已把外部版本另存为 ${path.basename(conflictPath)}，本次以当前内存状态落盘。`);
         console.warn('    若外部版本里有需要保留的记录，请用界面上的「⇒ 导入备份」导入该文件。');
@@ -126,6 +156,67 @@ function saveData(d) {
   fs.writeFileSync(tmp, JSON.stringify(d, null, 2), 'utf8');
   fs.renameSync(tmp, DATA_FILE);
   try { lastMtimeMs = fs.statSync(DATA_FILE).mtimeMs; } catch (_) { lastMtimeMs = 0; }
+}
+
+function snapshotFiles() {
+  try {
+    return fs.readdirSync(SNAPSHOT_DIR)
+      .filter((name) => /^snapshot-[\dTZ_-]+-(?:daily|before-import|before-restore|before-delete|external-edit)-[\w-]+\.json$/.test(name))
+      .map((name) => ({ name, full: path.join(SNAPSHOT_DIR, name), mtime: fs.statSync(path.join(SNAPSHOT_DIR, name)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime);
+  } catch (_) { return []; }
+}
+function hasSnapshotForDay(day) {
+  const prefix = `snapshot-${day}`;
+  return snapshotFiles().some((item) => item.name.startsWith(prefix));
+}
+function createSnapshot(reason) {
+  if (!fs.existsSync(DATA_FILE)) return null;
+  try {
+    fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
+    const stamp = `${dayStr()}T${new Date().toISOString().slice(11).replace(/[:.]/g, '-')}`;
+    const id = `snapshot-${stamp}-${reason}-${crypto.randomBytes(3).toString('hex')}`;
+    const full = path.join(SNAPSHOT_DIR, `${id}.json`);
+    fs.copyFileSync(DATA_FILE, full);
+    const assetDir = path.join(SNAPSHOT_DIR, id);
+    let saved;
+    try { saved = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } catch (_) { saved = null; }
+    if (saved && (Array.isArray(saved.tasks) || Array.isArray(saved.mangas))) {
+      fs.mkdirSync(assetDir, { recursive: true });
+      const urls = allTasksOf(saved).flatMap((task) => (task.entries || []).flatMap((entry) => [
+        ...(entry.images || []).map((item) => item.url), ...(entry.files || []).map((item) => item.url),
+      ]));
+      for (const url of new Set(urls)) {
+        if (!/^\/uploads\/[\w.-]+$/.test(url)) continue;
+        const source = path.join(UPLOAD_DIR, path.basename(url));
+        const destination = path.join(assetDir, path.basename(url));
+        if (!fs.existsSync(source)) continue;
+        try { fs.linkSync(source, destination); }
+        catch (_) { try { fs.copyFileSync(source, destination); } catch (_) { /* 缺失或不可读附件不阻止记录快照 */ } }
+      }
+    }
+    for (const old of snapshotFiles().slice(SNAPSHOT_LIMIT)) {
+      try {
+        fs.unlinkSync(old.full);
+        const oldId = old.name.slice(0, -5);
+        const oldAssets = path.join(SNAPSHOT_DIR, oldId);
+        if (oldAssets.startsWith(`${SNAPSHOT_DIR}${path.sep}`)) fs.rmSync(oldAssets, { recursive: true, force: true });
+      } catch (_) { /* 忽略清理失败 */ }
+    }
+    return id;
+  } catch (e) {
+    console.warn('[!] 自动快照失败：', e.message);
+    return null;
+  }
+}
+function listSnapshots() {
+  return snapshotFiles().map(({ name, full, mtime }) => {
+    let tasks = 0;
+    try { tasks = allTasksOf(JSON.parse(fs.readFileSync(full, 'utf8'))).length; } catch (_) { /* 显示损坏快照，恢复接口会给出错误 */ }
+    const id = name.slice(0, -5);
+    const reason = id.match(/-(daily|before-import|before-restore|before-delete|external-edit)-[\w-]+$/)?.[1] || 'daily';
+    return { id, createdAt: new Date(mtime).toISOString(), reason, tasks };
+  });
 }
 
 let data = loadData();
@@ -161,7 +252,22 @@ acquireLock();
 
 /* ---------------- 工具 ---------------- */
 const S = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
-const findTask = (id) => data.tasks.find((t) => t.id === id);
+function mangaForRequest(req) {
+  const id = new URL(req.url, 'http://x').searchParams.get('mangaId') || data.activeMangaId;
+  return data.mangas.find((m) => m.id === id) || data.mangas.find((m) => m.id === data.activeMangaId) || data.mangas[0] || null;
+}
+const findTask = (id, req) => mangaForRequest(req)?.tasks.find((t) => t.id === id);
+function clientData(mangaId) {
+  const manga = data.mangas.find((m) => m.id === mangaId) || data.mangas[0];
+  return {
+    version: 2,
+    seededAt: data.seededAt,
+    activeMangaId: manga?.id || '',
+    activeMangaTitle: manga?.title || '',
+    mangas: data.mangas.map((m) => ({ id: m.id, title: m.title, createdAt: m.createdAt, taskCount: m.tasks.length })),
+    tasks: manga ? manga.tasks : [],
+  };
+}
 
 function normalizeTags(v) {
   if (!Array.isArray(v)) return [];
@@ -174,6 +280,13 @@ function normalizeTodos(v) {
     text: S(x && x.text, 200),
     done: !!(x && x.done),
   })).filter((t) => t.text);
+}
+function normalizeRelation(v) {
+  if (!v || typeof v !== 'object') return null;
+  const taskId = typeof v.taskId === 'string' && /^t_[\w-]+$/.test(v.taskId) ? v.taskId : '';
+  const entryId = typeof v.entryId === 'string' && /^e_[\w-]+$/.test(v.entryId) ? v.entryId : '';
+  const type = ['相关', '修复', '回滚', '验证'].includes(v.type) ? v.type : '相关';
+  return taskId && entryId ? { taskId, entryId, type } : null;
 }
 
 const IMG_TYPES = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
@@ -248,6 +361,8 @@ function normalizeEntry(body) {
       result: RESULTS.includes(body.result) ? body.result : '待验证',
       title,
       detail: S(body.detail, 5000),
+      reviewAt: S(body.reviewAt, 16),
+      relation: normalizeRelation(body.relation),
       images: normalizeImages(body.images),
       tables: normalizeTables(body.tables),
       files: normalizeFiles(body.files),
@@ -359,7 +474,63 @@ document.getElementById('f').addEventListener('submit', async (ev) => {
 
 /* ---------------- API ---------------- */
 const routes = [
-  ['GET', /^\/api\/data$/, (req, res) => json(res, 200, data)],
+  ['GET', /^\/api\/data$/, (req, res) => {
+    const query = new URL(req.url, 'http://x').searchParams;
+    return json(res, 200, query.get('all') === '1' ? data : clientData(mangaForRequest(req)?.id));
+  }],
+  ['POST', /^\/api\/mangas$/, (req, res, m, body) => {
+    const title = S(body.title, 80);
+    if (!title) return json(res, 400, { error: '漫画名不能为空' });
+    const manga = { id: uid('m'), title, createdAt: new Date().toISOString(), tasks: [] };
+    data.mangas.unshift(manga);
+    data.activeMangaId = manga.id;
+    saveData(data);
+    return json(res, 200, { ok: true, manga, data: clientData(manga.id) });
+  }],
+  ['PATCH', /^\/api\/mangas\/([A-Za-z0-9_-]+)$/, (req, res, m, body) => {
+    const manga = data.mangas.find((item) => item.id === m[1]);
+    if (!manga) return json(res, 404, { error: '找不到这部漫画' });
+    const title = S(body.title, 80);
+    if (!title) return json(res, 400, { error: '漫画名不能为空' });
+    manga.title = title;
+    saveData(data);
+    return json(res, 200, { ok: true, manga, data: clientData(manga.id) });
+  }],
+  ['GET', /^\/api\/snapshots$/, (req, res) => json(res, 200, { snapshots: listSnapshots() })],
+  ['POST', /^\/api\/snapshots\/restore$/, (req, res, m, body) => {
+    const id = typeof body.id === 'string' && /^snapshot-[\dTZ_-]+-(?:daily|before-import|before-restore|before-delete|external-edit)-[\w-]+$/.test(body.id) ? body.id : '';
+    if (!id) return json(res, 400, { error: '快照编号无效' });
+    const full = path.join(SNAPSHOT_DIR, `${id}.json`);
+    if (!full.startsWith(`${SNAPSHOT_DIR}${path.sep}`) || !fs.existsSync(full)) return json(res, 404, { error: '找不到这份快照' });
+    let restored;
+    try { restored = JSON.parse(fs.readFileSync(full, 'utf8')); } catch (_) { return json(res, 400, { error: '快照文件损坏，无法恢复' }); }
+    try { restored = normalizeStoredData(restored); }
+    catch (_) { return json(res, 400, { error: '快照内容不完整，无法恢复' }); }
+    const assetDir = path.join(SNAPSHOT_DIR, id);
+    const requiredAssets = allTasksOf(restored).flatMap((task) => (task.entries || []).flatMap((entry) => [
+      ...(entry.images || []).map((item) => item.url), ...(entry.files || []).map((item) => item.url),
+    ]));
+    let missingAssets = 0;
+    for (const url of new Set(requiredAssets)) {
+      if (!/^\/uploads\/[\w.-]+$/.test(url)) continue;
+      const name = path.basename(url);
+      const source = path.join(assetDir, name);
+      const destination = path.join(UPLOAD_DIR, name);
+      if (!fs.existsSync(source)) { if (!fs.existsSync(destination)) missingAssets++; continue; }
+      if (fs.existsSync(destination)) {
+        try {
+          const [srcStat, dstStat] = [fs.statSync(source), fs.statSync(destination)];
+          if (srcStat.dev === dstStat.dev && srcStat.ino === dstStat.ino) continue;
+        } catch (_) { /* 继续尝试复制快照附件 */ }
+      }
+      try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); fs.copyFileSync(source, destination); }
+      catch (_) { missingAssets++; }
+    }
+    createSnapshot('before-restore');
+    data = restored;
+    saveData(data);
+    return json(res, 200, { ok: true, mangas: data.mangas.length, tasks: allTasksOf(data).length, missingAssets });
+  }],
 
   ['POST', /^\/api\/tasks$/, (req, res, m, body) => {
     const title = S(body.title, 120);
@@ -374,13 +545,13 @@ const routes = [
       todos: normalizeTodos(body.todos),
       createdAt: now, updatedAt: now, entries: [],
     };
-    data.tasks.unshift(task);
+    mangaForRequest(req).tasks.unshift(task);
     saveData(data);
     return json(res, 200, { ok: true, task });
   }],
 
   ['PATCH', /^\/api\/tasks\/([A-Za-z0-9_-]+)$/, (req, res, m, body) => {
-    const task = findTask(m[1]);
+    const task = findTask(m[1], req);
     if (!task) return json(res, 404, { error: '没有这一话' });
     if (body.title !== undefined) {
       const title = S(body.title, 120);
@@ -398,9 +569,11 @@ const routes = [
   }],
 
   ['DELETE', /^\/api\/tasks\/([A-Za-z0-9_-]+)$/, (req, res, m) => {
-    const task = findTask(m[1]);
+    const task = findTask(m[1], req);
     if (!task) return json(res, 404, { error: '没有这一话' });
-    data.tasks = data.tasks.filter((t) => t.id !== m[1]);
+    createSnapshot('before-delete');
+    const manga = mangaForRequest(req);
+    manga.tasks = manga.tasks.filter((t) => t.id !== m[1]);
     (task.entries || []).forEach((e) => {
       removeUploads((e.images || []).map((x) => x.url));
       removeUploads((e.files || []).map((x) => x.url));
@@ -428,7 +601,7 @@ const routes = [
   }],
 
   ['POST', /^\/api\/tasks\/([A-Za-z0-9_-]+)\/entries$/, (req, res, m, body) => {
-    const task = findTask(m[1]);
+    const task = findTask(m[1], req);
     if (!task) return json(res, 404, { error: '没有这一话' });
     const ne = normalizeEntry(body);
     if (ne.error) return json(res, 400, { error: ne.error });
@@ -439,7 +612,7 @@ const routes = [
   }],
 
   ['PATCH', /^\/api\/tasks\/([A-Za-z0-9_-]+)\/entries\/([A-Za-z0-9_-]+)$/, (req, res, m, body) => {
-    const task = findTask(m[1]);
+    const task = findTask(m[1], req);
     if (!task) return json(res, 404, { error: '没有这一话' });
     const entry = task.entries.find((e) => e.id === m[2]);
     if (!entry) return json(res, 404, { error: '没有这一格' });
@@ -452,17 +625,24 @@ const routes = [
     if (body.kind !== undefined && KINDS.includes(body.kind)) entry.kind = body.kind;
     if (body.result !== undefined && RESULTS.includes(body.result)) entry.result = body.result;
     if (body.detail !== undefined) entry.detail = S(body.detail, 5000);
-    /* 附件做差集清理：只删被换掉/移除的旧文件，避免 uploads/ 无限膨胀 */
+    if (body.reviewAt !== undefined) entry.reviewAt = S(body.reviewAt, 16);
+    if (body.relation !== undefined) entry.relation = normalizeRelation(body.relation);
+    /* 附件做差集清理；清理前先快照，让删除的文件仍可从快照恢复。 */
+    let assetSnapshotMade = false;
     if (body.images !== undefined) {
       const old = (entry.images || []).map((x) => x.url);
       entry.images = normalizeImages(body.images);
-      removeUploads(orphansOf(old, entry.images));
+      const removed = orphansOf(old, entry.images);
+      if (removed.length) { createSnapshot('before-delete'); assetSnapshotMade = true; }
+      removeUploads(removed);
     }
     if (body.tables !== undefined) entry.tables = normalizeTables(body.tables);
     if (body.files !== undefined) {
       const old = (entry.files || []).map((x) => x.url);
       entry.files = normalizeFiles(body.files);
-      removeUploads(orphansOf(old, entry.files));
+      const removed = orphansOf(old, entry.files);
+      if (removed.length && !assetSnapshotMade) createSnapshot('before-delete');
+      removeUploads(removed);
     }
     task.updatedAt = stampLocal(0, `${pad(new Date().getHours())}:${pad(new Date().getMinutes())}`);
     saveData(data);
@@ -470,13 +650,11 @@ const routes = [
   }],
 
   ['POST', /^\/api\/import$/, (req, res, m, body) => {
-    if (!Array.isArray(body.tasks)) return json(res, 400, { error: '缺少 tasks 数组' });
-    const cleaned = [];
-    for (const t of body.tasks.slice(0, 500)) {
+    const cleanTasks = (input) => input.slice(0, 500).map((t) => {
       const title = S(t && t.title, 120);
-      if (!title) continue;
+      if (!title) return null;
       const now = stampLocal(0, `${pad(new Date().getHours())}:${pad(new Date().getMinutes())}`);
-      cleaned.push({
+      return {
         id: (typeof t.id === 'string' && /^t_[\w-]+$/.test(t.id)) ? t.id : uid('t'),
         title,
         host: S(t.host, 80),
@@ -493,22 +671,53 @@ const routes = [
           result: RESULTS.includes(e && e.result) ? e.result : '待验证',
           title: S(e && e.title, 120),
           detail: S(e && e.detail, 5000),
+          reviewAt: S(e && e.reviewAt, 16),
+          relation: normalizeRelation(e && e.relation),
           images: normalizeImages(e && e.images),
           tables: normalizeTables(e && e.tables),
           files: normalizeFiles(e && e.files),
         })).filter((e) => e.title),
-      });
+      };
+    }).filter(Boolean);
+
+    let importedMangas = null;
+    let importedTasks = null;
+    if (Array.isArray(body.mangas)) {
+      importedMangas = body.mangas.slice(0, 100).map((manga, i) => ({
+        id: manga && typeof manga.id === 'string' && /^m_[\w-]+$/.test(manga.id) ? manga.id : uid('m'),
+        title: S(manga && manga.title, 80) || `漫画 ${i + 1}`,
+        createdAt: S(manga && manga.createdAt, 40) || new Date().toISOString(),
+        tasks: cleanTasks(Array.isArray(manga && manga.tasks) ? manga.tasks : []),
+      }));
+      if (!importedMangas.length) return json(res, 400, { error: '备份里没有漫画' });
+    } else if (Array.isArray(body.tasks)) {
+      importedTasks = cleanTasks(body.tasks);
+    } else {
+      return json(res, 400, { error: '缺少 mangas 或 tasks 数组' });
     }
-    data = { version: 1, seededAt: data.seededAt, tasks: cleaned };
+
+    createSnapshot('before-import');
+    if (importedMangas) {
+      const requestedActive = S(body.activeMangaId, 100);
+      data = {
+        version: 2,
+        seededAt: data.seededAt,
+        activeMangaId: importedMangas.some((manga) => manga.id === requestedActive) ? requestedActive : importedMangas[0].id,
+        mangas: importedMangas,
+      };
+    } else {
+      mangaForRequest(req).tasks = importedTasks;
+    }
     saveData(data);
-    return json(res, 200, { ok: true, tasks: cleaned.length });
+    return json(res, 200, { ok: true, mangas: data.mangas.length, tasks: allTasksOf(data).length });
   }],
 
   ['DELETE', /^\/api\/tasks\/([A-Za-z0-9_-]+)\/entries\/([A-Za-z0-9_-]+)$/, (req, res, m) => {
-    const task = findTask(m[1]);
+    const task = findTask(m[1], req);
     if (!task) return json(res, 404, { error: '没有这一话' });
     const removed = task.entries.find((e) => e.id === m[2]);
     if (!removed) return json(res, 404, { error: '没有这一格' });
+    createSnapshot('before-delete');
     task.entries = task.entries.filter((e) => e.id !== m[2]);
     removeUploads((removed.images || []).map((x) => x.url));
     removeUploads((removed.files || []).map((x) => x.url));

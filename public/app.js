@@ -18,14 +18,20 @@ const KIND_HINTS = [
 ];
 
 const state = {
-  data: { tasks: [] },
+  data: { tasks: [], mangas: [] },
+  activeMangaId: localStorage.getItem('manga-log-active') || null,
   currentId: null,
   query: '',
-  view: 'toc',          // toc | stats
+  view: 'toc',          // toc | timeline | inbox | stats
   statusFilter: '全部',
   editTaskId: null,
+  editMangaId: null,
   editEntryId: null,
   pendingImport: null,  // 待确认的导入数据
+  snapshots: [],
+  timelineFilters: { host: '', kind: '', result: '', from: '', to: '' },
+  previewFile: null,
+  comparisonCandidates: [],
 };
 
 /* 条目表单内的附件草稿（提交时随格一起保存） */
@@ -104,6 +110,12 @@ function detectKind(text) {
 function currentTask() { return state.data.tasks.find((t) => t.id === state.currentId) || null; }
 
 async function api(path, opts = {}) {
+  const route = path.split('?')[0];
+  if (state.activeMangaId && (route === '/api/data' || route === '/api/import' || route === '/api/tasks' || route.startsWith('/api/tasks/'))) {
+    const url = new URL(path, location.origin);
+    if (!url.searchParams.has('mangaId')) url.searchParams.set('mangaId', state.activeMangaId);
+    path = `${url.pathname}${url.search}`;
+  }
   const res = await fetch(path, {
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'manga-log' },
     ...opts,
@@ -186,13 +198,25 @@ function renderChips() {
   ).join('');
 }
 function renderTabs() {
-  const stats = state.view === 'stats';
-  $('#tabToc').classList.toggle('active', !stats);
-  $('#tabStats').classList.toggle('active', stats);
-  $('#tocEn').textContent = stats ? 'EXTRA' : 'CONTENTS';
-  $('#statusChips').classList.toggle('hidden', stats);
-  $('#search').classList.toggle('hidden', stats);
-  $('#taskList').classList.toggle('hidden', stats);
+  const labels = { toc: ['tabToc', 'CONTENTS'], timeline: ['tabTimeline', 'TIMELINE'], inbox: ['tabInbox', 'INBOX'], stats: ['tabStats', 'EXTRA'] };
+  for (const id of ['tabToc', 'tabTimeline', 'tabInbox', 'tabStats']) $(`#${id}`).classList.toggle('active', id === labels[state.view]?.[0]);
+  $('#tocEn').textContent = labels[state.view]?.[1] || 'CONTENTS';
+  const isToc = state.view === 'toc';
+  $('#statusChips').classList.toggle('hidden', !isToc);
+  $('#search').classList.toggle('hidden', !isToc);
+  $('#taskList').classList.toggle('hidden', !isToc);
+  $('#btnNewTask').classList.toggle('hidden', !isToc);
+}
+
+function renderMangaPicker() {
+  const select = $('#mangaSelect');
+  if (!select) return;
+  const mangas = state.data.mangas || [];
+  select.innerHTML = mangas.map((m) => `<option value="${esc(m.id)}">${esc(m.title)}${m.taskCount ? ` · ${m.taskCount} 话` : ' · 未开篇'}</option>`).join('');
+  select.value = state.activeMangaId || mangas[0]?.id || '';
+  select.disabled = mangas.length < 2;
+  $('#btnRenameManga').disabled = !mangas.length;
+  syncComicSelect(select);
 }
 function renderQuickSelect() {
   const sel = $('#quickTask');
@@ -296,17 +320,25 @@ function renderTable(tb) {
   </div>`;
 }
 
-function panelHTML(e, idx) {
+function relationTarget(relation, tasks = state.data.tasks) {
+  if (!relation) return null;
+  const task = tasks.find((t) => t.id === relation.taskId);
+  const entry = task?.entries.find((x) => x.id === relation.entryId);
+  return task && entry ? { task, entry } : null;
+}
+function panelHTML(e, idx, taskId = state.currentId) {
   const sfx = KIND_SFX[e.kind] || '记';
   const badgeCls = e.result === '成功' ? 'ok' : e.result === '失败' ? 'bad' : 'pending';
   const badgeTxt = e.result === '成功' ? '成功' : e.result === '失败' ? '✗ 失败' : '待验证';
   const r = idx % 3;
   return `
-  <article class="panel r${r + 1}" data-eid="${esc(e.id)}">
+  <article class="panel r${r + 1}" data-eid="${esc(e.id)}" data-tid="${esc(taskId || '')}">
     <div class="p-no">${pad(idx + 1)}</div>
     <div class="stamp roughen" title="${esc(e.kind)}">${esc(sfx)}</div>
     <div class="e-head"><span class="e-kind">${esc(e.kind)}</span><span class="e-time mono">${esc(e.time || '')}</span></div>
     <h4 class="e-title">${esc(e.title)}</h4>
+    ${e.reviewAt ? `<div class="entry-review mono">⌁ 复核时间：${esc(e.reviewAt)}</div>` : ''}
+    ${(() => { const target = relationTarget(e.relation); return target ? `<div class="entry-relation">${esc(e.relation.type || '相关')} → <button type="button" class="text-link" data-action="open-related" data-tid="${esc(target.task.id)}" data-eid="${esc(target.entry.id)}">${esc(target.entry.title)}</button><span class="mono"> · ${esc(target.task.host || target.task.title)}</span></div>` : ''; })()}
     ${e.detail ? `<div class="bubble">${renderDetail(e.detail)}</div>` : ''}
     ${(e.images && e.images.length) ? `
     <div class="e-imgs">
@@ -330,8 +362,8 @@ function panelHTML(e, idx) {
     <div class="e-foot">
       <span class="badge ${badgeCls}">${esc(badgeTxt)}</span>
       <span class="spacer"></span>
-      <button class="btn-icon" data-action="edit-entry" data-id="${esc(e.id)}" title="修改此格">✎ 改</button>
-      <button class="btn-icon" data-action="del-entry" data-id="${esc(e.id)}" title="撕掉此格">✕ 撕</button>
+      <button class="btn-icon" data-action="edit-entry" data-id="${esc(e.id)}" data-tid="${esc(taskId || '')}" title="修改此格">✎ 改</button>
+      <button class="btn-icon" data-action="del-entry" data-id="${esc(e.id)}" data-tid="${esc(taskId || '')}" title="撕掉此格">✕ 撕</button>
     </div>
   </article>`;
 }
@@ -407,7 +439,7 @@ function renderFileStrip() {
 
 function entryFormHTML(t, nextNo) {
   const editing = state.editEntryId ? t.entries.find((e) => e.id === state.editEntryId) : null;
-  const e = editing || { time: nowLocal().replace(' ', 'T'), kind: '配置', result: '待验证', title: '', detail: '' };
+  const e = editing || { time: nowLocal().replace(' ', 'T'), kind: '配置', result: '待验证', title: '', detail: '', reviewAt: '', relation: null };
   formImages = editing ? (editing.images || []).map((x) => ({ ...x })) : [];
   formTables = editing ? (editing.tables || []).map((tb) => ({ ...tb, cols: [...tb.cols], rows: tb.rows.map((r) => [...r]) })) : [];
   formFiles = editing ? (editing.files || []).map((x) => ({ ...x })) : [];
@@ -428,6 +460,24 @@ function entryFormHTML(t, nextNo) {
         <label class="lb">结果
           <select class="ipt" name="e-result">
             ${['成功', '待验证', '失败'].map((r) => `<option ${r === e.result ? 'selected' : ''}>${r}</option>`).join('')}
+          </select>
+        </label>
+      </div>
+      <div class="form-grid relation-grid">
+        <label class="lb">复核时间（可选）
+          <input class="ipt" type="datetime-local" name="e-review" value="${esc(e.reviewAt ? String(e.reviewAt).replace(' ', 'T') : '')}">
+        </label>
+        <label class="lb relation-choice">关联记录
+          <select class="ipt" name="e-related">
+            <option value="">不关联</option>
+            ${state.data.tasks.flatMap((task) => task.entries.map((entry) => ({ task, entry })))
+              .filter(({ entry }) => entry.id !== editing?.id)
+              .map(({ task, entry }) => `<option value="${esc(task.id)}|${esc(entry.id)}" ${e.relation?.taskId === task.id && e.relation?.entryId === entry.id ? 'selected' : ''}>${esc(task.host || task.title)} · ${esc(entry.title)}</option>`).join('')}
+          </select>
+        </label>
+        <label class="lb">关系
+          <select class="ipt" name="e-rel-type">
+            ${['相关', '修复', '回滚', '验证'].map((kind) => `<option ${kind === (e.relation?.type || '相关') ? 'selected' : ''}>${kind}</option>`).join('')}
           </select>
         </label>
       </div>
@@ -479,9 +529,56 @@ function todosHTML(t) {
   </div>`;
 }
 
+function renderTimeline(stage) {
+  const all = state.data.tasks.flatMap((task) => task.entries.map((entry, index) => ({ task, entry, index })));
+  const hosts = [...new Set(state.data.tasks.map((t) => t.host).filter(Boolean))].sort();
+  const f = state.timelineFilters;
+  const filtered = all.filter(({ task, entry }) => {
+    const date = String(entry.time || '').slice(0, 10);
+    return (!f.host || (f.host === '__empty__' ? !task.host : task.host === f.host)) && (!f.kind || entry.kind === f.kind) && (!f.result || entry.result === f.result)
+      && (!f.from || date >= f.from) && (!f.to || date <= f.to);
+  }).sort((a, b) => String(b.entry.time).localeCompare(String(a.entry.time)));
+  stage.innerHTML = `
+    <div class="ep-head global-head"><div class="vol-badge"><span class="num">時</span><span class="hua">全局记录</span></div>
+      <div class="ep-info"><h2 class="ep-title">全局时间线</h2><div class="ep-meta"><span class="chip">${filtered.length} / ${all.length} 格</span><span class="chip">跨 ${state.data.tasks.length} 话</span></div></div>
+    </div>
+    <div class="timeline-filters">
+      <label>主机<select class="ipt rs" data-timeline-filter="host"><option value="">全部主机</option><option value="__empty__" ${f.host === '__empty__' ? 'selected' : ''}>未填主机</option>${hosts.map((h) => `<option ${f.host === h ? 'selected' : ''}>${esc(h)}</option>`).join('')}</select></label>
+      <label>类型<select class="ipt rs" data-timeline-filter="kind"><option value="">全部类型</option>${KINDS.map((k) => `<option ${f.kind === k ? 'selected' : ''}>${k}</option>`).join('')}</select></label>
+      <label>结果<select class="ipt rs" data-timeline-filter="result"><option value="">全部结果</option>${['成功', '待验证', '失败'].map((r) => `<option ${f.result === r ? 'selected' : ''}>${r}</option>`).join('')}</select></label>
+      <label>从<input class="ipt rs" type="date" data-timeline-filter="from" value="${esc(f.from)}"></label>
+      <label>至<input class="ipt rs" type="date" data-timeline-filter="to" value="${esc(f.to)}"></label>
+      <button class="btn rs" data-action="clear-timeline-filters">清空筛选</button>
+    </div>
+    <div class="divider" aria-hidden="true"></div>
+    <div class="timeline-task-label mono">按时间倒序 · 点「编辑」可回到原任务</div>
+    <div class="panels">${filtered.length ? filtered.map(({ task, entry, index }) => `<div class="timeline-item"><div class="timeline-context"><span>第${cnNum(state.data.tasks.indexOf(task) + 1)}话</span><strong>${esc(task.title)}</strong>${task.host ? `<span class="chip">${esc(task.host)}</span>` : ''}</div>${panelHTML(entry, index, task.id)}</div>`).join('') : '<div class="toc-empty">没有符合条件的记录。</div>'}</div>`;
+}
+
+function renderInbox(stage) {
+  const pendingEntries = [];
+  const pendingTodos = [];
+  for (const task of state.data.tasks) {
+    for (const entry of task.entries) if (entry.result === '待验证') pendingEntries.push({ task, entry });
+    for (const todo of task.todos || []) if (!todo.done) pendingTodos.push({ task, todo });
+  }
+  pendingEntries.sort((a, b) => String(a.entry.reviewAt || a.entry.time).localeCompare(String(b.entry.reviewAt || b.entry.time)));
+  stage.innerHTML = `
+    <div class="ep-head global-head"><div class="vol-badge"><span class="num">?</span><span class="hua">复核队列</span></div>
+      <div class="ep-info"><h2 class="ep-title">待验证收件箱</h2><div class="ep-meta"><span class="chip tag">${pendingEntries.length} 格待验证</span><span class="chip">${pendingTodos.length} 件未完成</span></div></div>
+    </div>
+    <p class="inbox-intro">集中查看尚未确认结果的改动与遗留事项，点开一项即可回到原话。</p>
+    <div class="inbox-columns">
+      <section><h3 class="stat-title">待验证改动</h3><div class="panels">${pendingEntries.length ? pendingEntries.map(({ task, entry }, i) => `<div class="inbox-record"><div class="timeline-context"><strong>${esc(task.title)}</strong>${task.host ? `<span class="chip">${esc(task.host)}</span>` : ''}<span class="mono">${esc(entry.reviewAt ? `复核 ${entry.reviewAt}` : entry.time || '')}</span><button class="btn-mini rs" data-action="open-inbox-entry" data-tid="${esc(task.id)}" data-eid="${esc(entry.id)}">打开原格 →</button></div>${panelHTML(entry, i, task.id)}</div>`).join('') : '<div class="toc-empty">当前没有待验证改动。</div>'}</div></section>
+      <section><h3 class="stat-title">未完成事项</h3><div class="inbox-todos">${pendingTodos.length ? pendingTodos.map(({ task, todo }) => `<article class="inbox-todo"><span class="todo-mark">□</span><div><strong>${esc(todo.text)}</strong><div class="mono">${esc(task.host || '未填主机')} · ${esc(task.title)}</div></div><button class="btn-mini rs" data-action="open-inbox-todo" data-tid="${esc(task.id)}">回到本话 →</button></article>`).join('') : '<div class="toc-empty">没有遗留事项。</div>'}</div></section>
+    </div>`;
+}
+
 function renderStage() {
   const stage = $('#stage');
   if (state.view === 'stats') return renderStats(stage);
+  if (state.view === 'timeline') return renderTimeline(stage);
+  if (state.view === 'inbox') return renderInbox(stage);
   const t = currentTask();
   if (!t) {
     stage.innerHTML = `
@@ -544,6 +641,7 @@ function renderStage() {
 
 function renderAll() {
   renderTicker();
+  renderMangaPicker();
   renderTabs();
   renderChips();
   renderToc();
@@ -655,10 +753,14 @@ function renderStats(stage) {
     </section>
     <section class="stat-block r2">
       <h3 class="stat-title">备份与搬家</h3>
-      <p class="stat-note">全部记录都存在本地 data.json。导出 JSON 备份留底；导入备份会<b>覆盖</b>当前全部记录。注意：备份 JSON 不含图片文件，贴过的图都在 uploads/ 目录，搬家时把整个 uploads 目录一起拷走。</p>
+      <p class="stat-note">每天首次改动会留快照；删除附件、导入覆盖和恢复前也会留一份。最多保留 40 份，自动快照连同记录引用的附件一起保存。手动 JSON 备份不含附件，搬家时需另拷 uploads/。</p>
       <div class="backup-row">
         <button class="btn rs" data-action="export-backup">⇩ 导出备份</button>
         <button class="btn rs" data-action="import-backup">⇒ 导入备份</button>
+      </div>
+      <div class="snapshot-list">
+        <h4>自动快照 <span class="mono">${state.snapshots.length} / 40</span></h4>
+        ${state.snapshots.length ? state.snapshots.map((snap) => `<div class="snapshot-row"><span class="mono">${esc(snap.createdAt.replace('T', ' ').slice(0, 16))}</span><span>${esc(({ daily: '每日', 'before-import': '导入前', 'before-restore': '恢复前', 'before-delete': '删除前', 'external-edit': '外部改动' })[snap.reason] || '自动')} · ${snap.tasks} 话</span><button class="btn-mini rs" data-action="restore-snapshot" data-id="${esc(snap.id)}">恢复</button></div>`).join('') : '<p class="stat-empty">第一次数据改动后会生成每日快照。</p>'}
       </div>
     </section>
   </div>
@@ -720,6 +822,7 @@ const PREVIEW_LINE_CAP = 2000;              // 最多预览行数
 
 async function previewFile(url, name, size) {
   const ext = extOf(name);
+  state.previewFile = { url, name, size, ext };
   $('#pvName').textContent = name;
   $('#pvSize').textContent = fmtSize(size);
   const dl = $('#pvDownload');
@@ -727,6 +830,18 @@ async function previewFile(url, name, size) {
   dl.setAttribute('download', name);
   const body = $('#pvBody');
   body.innerHTML = '<div class="pv-note">读取中…</div>';
+  $('#pvCompare').classList.toggle('hidden', !PREVIEW_TEXT_EXTS.has(ext) || size > PREVIEW_TEXT_CAP);
+  $('#pvCompareFile').innerHTML = '';
+  $('#pvCompareRun').disabled = true;
+  if (PREVIEW_TEXT_EXTS.has(ext) && size <= PREVIEW_TEXT_CAP) {
+    state.comparisonCandidates = state.data.tasks.flatMap((task) => task.entries.flatMap((entry) => (entry.files || [])
+      .filter((file) => file.url !== url && PREVIEW_TEXT_EXTS.has(extOf(file.name)) && file.size <= PREVIEW_TEXT_CAP)
+      .map((file) => ({ ...file, taskTitle: task.title, time: entry.time }))));
+    $('#pvCompareFile').innerHTML = state.comparisonCandidates.length
+      ? state.comparisonCandidates.map((file, i) => `<option value="${i}">${esc(file.name)} · ${esc(file.taskTitle)} · ${esc(file.time || '')}</option>`).join('')
+      : '<option value="">没有其他可比较的文本附件</option>';
+    $('#pvCompareRun').disabled = !state.comparisonCandidates.length;
+  }
   $('#filePreview').classList.remove('hidden');
   try {
     if (ext === 'pdf') {
@@ -770,6 +885,51 @@ async function previewFile(url, name, size) {
 function closePreview() {
   $('#filePreview').classList.add('hidden');
   $('#pvBody').innerHTML = '';
+  $('#pvCompare').classList.add('hidden');
+  state.previewFile = null;
+}
+
+function diffRows(before, after) {
+  const a = before.replace(/\r/g, '').split('\n').slice(0, PREVIEW_LINE_CAP);
+  const b = after.replace(/\r/g, '').split('\n').slice(0, PREVIEW_LINE_CAP);
+  if (a.length * b.length > 1500000) {
+    const n = Math.max(a.length, b.length);
+    return Array.from({ length: n }, (_, i) => {
+      if (a[i] === b[i]) return { a: a[i] ?? '', b: b[i] ?? '', an: i < a.length ? i + 1 : '', bn: i < b.length ? i + 1 : '', sa: 'same', sb: 'same' };
+      return { a: a[i] ?? '', b: b[i] ?? '', an: i < a.length ? i + 1 : '', bn: i < b.length ? i + 1 : '', sa: i >= a.length ? 'empty' : 'remove', sb: i >= b.length ? 'empty' : 'add' };
+    });
+  }
+  const width = b.length + 1;
+  const dp = new Uint32Array((a.length + 1) * width);
+  for (let i = a.length - 1; i >= 0; i--) for (let j = b.length - 1; j >= 0; j--) {
+    const at = i * width + j;
+    dp[at] = a[i] === b[j] ? dp[(i + 1) * width + j + 1] + 1 : Math.max(dp[(i + 1) * width + j], dp[i * width + j + 1]);
+  }
+  const rows = []; let i = 0, j = 0, oldNo = 1, newNo = 1;
+  while (i < a.length || j < b.length) {
+    if (i < a.length && j < b.length && a[i] === b[j]) {
+      rows.push({ a: a[i], b: b[j], an: oldNo++, bn: newNo++, sa: 'same', sb: 'same' }); i++; j++;
+    } else if (i < a.length && (j >= b.length || dp[(i + 1) * width + j] >= dp[i * width + j + 1])) {
+      rows.push({ a: a[i], b: '', an: oldNo++, bn: '', sa: 'remove', sb: 'empty' }); i++;
+    } else {
+      rows.push({ a: '', b: b[j], an: '', bn: newNo++, sa: 'empty', sb: 'add' }); j++;
+    }
+  }
+  return rows;
+}
+async function comparePreviewFiles() {
+  const current = state.previewFile;
+  const other = state.comparisonCandidates[+$('#pvCompareFile').value];
+  if (!current || !other) return;
+  const body = $('#pvBody');
+  body.innerHTML = '<div class="pv-note">正在对照两个版本…</div>';
+  try {
+    const [a, b] = await Promise.all([fetch(current.url), fetch(other.url)]);
+    if (!a.ok || !b.ok) throw new Error('有一个文件读取失败');
+    const [before, after] = await Promise.all([a.text(), b.text()]);
+    const rows = diffRows(before, after);
+    body.innerHTML = `<div class="pv-diff-labels"><strong>当前：${esc(current.name)}</strong><strong>对照：${esc(other.name)}</strong></div><div class="pv-diff">${rows.map((row) => `<div class="pv-diff-row"><div class="pv-diff-cell ${row.sa}"><span class="pv-ln">${row.an ?? ''}</span><code>${esc(row.a)}</code></div><div class="pv-diff-cell ${row.sb}"><span class="pv-ln">${row.bn ?? ''}</span><code>${esc(row.b)}</code></div></div>`).join('')}</div>${before.split('\n').length > PREVIEW_LINE_CAP || after.split('\n').length > PREVIEW_LINE_CAP ? '<p class="pv-note">差异仅展示前 2000 行。</p>' : ''}`;
+  } catch (e) { body.innerHTML = `<div class="pv-note">比较失败：${esc(e.message)}</div>`; }
 }
 
 /* ---------------- 交互：刷新（支持草稿保护） ---------------- */
@@ -786,6 +946,9 @@ function captureEntryDraft() {
       result: form['e-result'].value,
       title: form['e-title'].value,
       detail: form['e-detail'].value,
+      reviewAt: form['e-review'].value,
+      relation: form['e-related'].value,
+      relationType: form['e-rel-type'].value,
     },
     images: formImages,
     tables: formTables,
@@ -796,13 +959,16 @@ function restoreEntryDraft(d) {
   if (!d) return;
   const form = $('#entryForm');
   if (!form || state.currentId !== d.taskId || state.editEntryId !== d.editId) return;
-  const empty = !d.editId && !d.v.title && !d.v.detail && !d.images.length && !d.tables.length && !d.files.length;
+  const empty = !d.editId && !d.v.title && !d.v.detail && !d.v.reviewAt && !d.v.relation && !d.images.length && !d.tables.length && !d.files.length;
   if (empty) return;
   form['e-time'].value = d.v.time;
   form['e-kind'].value = d.v.kind;
   form['e-result'].value = d.v.result;
   form['e-title'].value = d.v.title;
   form['e-detail'].value = d.v.detail;
+  form['e-review'].value = d.v.reviewAt;
+  form['e-related'].value = d.v.relation;
+  form['e-rel-type'].value = d.v.relationType;
   formImages = d.images;
   formTables = d.tables;
   formFiles = d.files;
@@ -812,9 +978,12 @@ function restoreEntryDraft(d) {
 }
 
 async function refresh(opts = {}) {
-  const fresh = await api('/api/data');
+  const [fresh, backupInfo] = await Promise.all([api('/api/data'), api('/api/snapshots')]);
   const draft = opts.preserve ? captureEntryDraft() : null;
   state.data = fresh;
+  state.activeMangaId = fresh.activeMangaId || fresh.mangas?.[0]?.id || null;
+  if (state.activeMangaId) localStorage.setItem('manga-log-active', state.activeMangaId);
+  state.snapshots = backupInfo.snapshots || [];
   if (!currentTask() && state.data.tasks.length) state.currentId = state.data.tasks[0].id;
   if (!state.data.tasks.length) state.currentId = null;
   renderAll();
@@ -826,8 +995,9 @@ async function refresh(opts = {}) {
 function isUserTypingInStage() {
   const el = document.activeElement;
   if (!el) return false;
-  if (!/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return false;
   const stage = $('#stage');
+  if (stage && stage.contains(el) && el.closest?.('.comic-date.open, .comic-select.open')) return true;
+  if (!/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return false;
   return !!(stage && stage.contains(el));
 }
 setInterval(async () => {
@@ -853,12 +1023,89 @@ function openTaskModal(task) {
   f.status.value = task ? task.status : '进行中';
   f.tags.value = task ? (task.tags || []).join(', ') : '';
   f.note.value = task ? task.note : '';
+  $('.template-field').classList.toggle('hidden', !!task);
+  f.template.value = 'custom';
+  syncComicSelect(f.template);
+  syncComicSelect(f.status);
+  f.title.dataset.templateTitle = '';
+  updateTemplateHint(f.template.value, f);
   $('#modal').classList.remove('hidden');
   f.title.focus();
+}
+
+const WORKFLOW_TEMPLATES = {
+  release: { title: '应用版本发布', label: '版本发布', todos: ['确认变更范围与审批', '确认备份和回滚方案', '灰度发布并观察指标', '全量发布后复核告警'] },
+  certificate: { title: 'TLS 证书续期', label: '证书续期', todos: ['核对域名与到期时间', '备份现有证书和配置', '续期并执行配置校验', 'reload 后验证证书链'] },
+  database: { title: '数据库变更', label: '数据库变更', todos: ['确认变更 SQL 与影响范围', '检查备份和恢复方案', '低峰执行并观察锁与耗时', '核对数据结果与慢查询'] },
+  incident: { title: '线上故障排查', label: '故障排查', todos: ['记录告警时间与影响范围', '收集日志、指标和近期变更', '执行止损或回滚并验证恢复', '补充根因与后续改进项'] },
+};
+function updateTemplateHint(value, form = $('#taskForm')) {
+  const hint = $('#templateHint');
+  if (!hint || !form) return;
+  const template = WORKFLOW_TEMPLATES[value];
+  hint.textContent = template ? `${template.label}检查清单：${template.todos.join(' · ')}` : '选择模板会预填检查清单，可按实际情况修改。';
 }
 function closeTaskModal() {
   $('#modal').classList.add('hidden');
   state.editTaskId = null;
+}
+
+function openMangaModal(manga = null) {
+  state.editMangaId = manga?.id || null;
+  $('#mangaModalTitle').textContent = manga ? '改漫画名' : '新的一部漫画';
+  const form = $('#mangaForm');
+  form.title.value = manga?.title || '';
+  form.querySelector('[type="submit"]').textContent = manga ? '保存题名' : '收进书架';
+  $('#mangaModal').classList.remove('hidden');
+  form.title.focus();
+}
+function closeMangaModal() {
+  $('#mangaModal').classList.add('hidden');
+  state.editMangaId = null;
+}
+async function onMangaSubmit(ev) {
+  ev.preventDefault();
+  const title = ev.target.title.value.trim();
+  if (!title) return;
+  try {
+    if (state.editMangaId) {
+      await api(`/api/mangas/${state.editMangaId}`, { method: 'PATCH', body: JSON.stringify({ title }) });
+      toast('漫画名改好了！', '改！');
+    } else {
+      const res = await api('/api/mangas', { method: 'POST', body: JSON.stringify({ title }) });
+      state.activeMangaId = res.manga.id;
+      localStorage.setItem('manga-log-active', state.activeMangaId);
+      state.currentId = null;
+      state.view = 'toc';
+      state.query = '';
+      state.statusFilter = '全部';
+      state.timelineFilters = { host: '', kind: '', result: '', from: '', to: '' };
+      $('#search').value = '';
+      toast('新漫画，开篇！', '开！');
+    }
+    closeMangaModal();
+    await refresh();
+  } catch (e) { toast(e.message, '啊！'); }
+}
+async function switchManga(id) {
+  if (!id || id === state.activeMangaId) return;
+  const previous = state.activeMangaId;
+  state.activeMangaId = id;
+  state.currentId = null;
+  state.editEntryId = null;
+  state.query = '';
+  state.statusFilter = '全部';
+  $('#search').value = '';
+  localStorage.setItem('manga-log-active', id);
+  try {
+    await refresh();
+    toast(`切到「${state.data.activeMangaTitle}」`, '切！');
+  } catch (e) {
+    state.activeMangaId = previous;
+    if (previous) localStorage.setItem('manga-log-active', previous);
+    renderMangaPicker();
+    toast(e.message, '啊！');
+  }
 }
 
 async function onTaskSubmit(ev) {
@@ -871,6 +1118,8 @@ async function onTaskSubmit(ev) {
     tags: f.tags.value.split(/[,，、]/).map((s) => s.trim()).filter(Boolean),
     note: f.note.value,
   };
+  const template = !state.editTaskId && WORKFLOW_TEMPLATES[f.template.value];
+  if (template) payload.todos = template.todos.map((text) => ({ id: genId('td'), text, done: false }));
   try {
     if (state.editTaskId) {
       await api(`/api/tasks/${state.editTaskId}`, { method: 'PATCH', body: JSON.stringify(payload) });
@@ -917,6 +1166,11 @@ async function onEntrySubmit(ev) {
     result: f['e-result'].value,
     title: f['e-title'].value,
     detail: f['e-detail'].value,
+    reviewAt: (f['e-review'].value || '').replace('T', ' '),
+    relation: (() => {
+      const [taskId, entryId] = (f['e-related'].value || '').split('|');
+      return taskId && entryId ? { taskId, entryId, type: f['e-rel-type'].value } : null;
+    })(),
     images: formImages,
     tables: formTables,
     files: formFiles,
@@ -940,8 +1194,10 @@ async function onEntrySubmit(ev) {
 }
 
 function editEntry(btn) {
+  if (btn.dataset.tid) state.currentId = btn.dataset.tid;
+  state.view = 'toc';
   state.editEntryId = btn.dataset.id;
-  renderStage();
+  renderTabs(); renderToc(); renderQuickSelect(); renderStage();
 }
 
 async function deleteEntry(btn) {
@@ -956,6 +1212,7 @@ async function deleteEntry(btn) {
     }, 2600);
     return;
   }
+  if (btn.dataset.tid) state.currentId = btn.dataset.tid;
   const t = currentTask();
   if (!t) return;
   try {
@@ -1019,13 +1276,13 @@ function deleteTodo(btn) {
 }
 
 /* ---------------- 导出 ---------------- */
-function buildMd(tasks) {
+function buildMd(tasks, mangaTitle = state.data.activeMangaTitle || '服务器改动', mangaTasks = tasks) {
   const lines = [];
   const total = tasks.reduce((s, t) => s + t.entries.length, 0);
-  lines.push('# 服务器改动 · 漫画志', '');
+  lines.push(`# ${mangaTitle} · 漫画志`, '');
   lines.push(`> 导出于 ${nowLocal()} · 共 ${tasks.length} 话 / ${total} 格`, '');
   tasks.forEach((t) => {
-    const idx = state.data.tasks.indexOf(t) + 1;
+    const idx = mangaTasks.indexOf(t) + 1;
     lines.push(`## 第${cnNum(idx)}话 · ${t.title}`, '');
     const metas = [`状态：${t.status}`];
     if (t.host) metas.push(`主机：${t.host}`);
@@ -1045,6 +1302,10 @@ function buildMd(tasks) {
       lines.push(`### 格 ${pad(j + 1)} ｜ ${e.time || '—'} ｜ ${e.kind} ｜ ${e.result}`);
       lines.push(`**${e.title}**`, '');
       if (e.detail) lines.push(e.detail, '');
+      if (e.reviewAt) lines.push(`- 复核时间：${e.reviewAt}`);
+      const related = relationTarget(e.relation, mangaTasks);
+      if (related) lines.push(`- ${e.relation.type || '相关'}：第${cnNum(mangaTasks.indexOf(related.task) + 1)}话 · ${related.entry.title}`);
+      if (e.reviewAt || related) lines.push('');
       (e.images || []).forEach((im) => lines.push(`![${im.name}](${im.url})`));
       if ((e.images || []).length) lines.push('');
       (e.files || []).forEach((fl) => lines.push(`📄 [${fl.name}](${fl.url})${fl.size ? `（${fmtSize(fl.size)}）` : ''}`));
@@ -1070,19 +1331,26 @@ function download(filename, text, mime = 'text/markdown;charset=utf-8') {
   a.click();
   URL.revokeObjectURL(a.href);
 }
-function exportMd() {
-  download(`漫画志_全稿_${dayStr()}.md`, buildMd(state.data.tasks));
-  toast('全稿导出齐了！', '齐！');
+async function exportMd() {
+  try {
+    const full = await api('/api/data?all=1');
+    const docs = full.mangas.map((manga) => buildMd(manga.tasks, manga.title, manga.tasks));
+    download(`漫画志_全稿_${dayStr()}.md`, docs.join('\n\n---\n\n'));
+    toast(`全稿导出齐了 · ${full.mangas.length} 部漫画`, '齐！');
+  } catch (e) { toast(e.message, '啊！'); }
 }
 function exportTaskMd() {
   const t = currentTask();
   if (!t) return;
-  download(`漫画志_${t.title.slice(0, 20)}_${dayStr()}.md`, buildMd([t]));
+  download(`漫画志_${t.title.slice(0, 20)}_${dayStr()}.md`, buildMd([t], state.data.activeMangaTitle, state.data.tasks));
   toast('本话导出齐了！', '齐！');
 }
-function exportBackup() {
-  download(`漫画志_备份_${dayStr()}.json`, JSON.stringify(state.data, null, 2), 'application/json');
-  toast('备份导出齐了！', '齐！');
+async function exportBackup() {
+  try {
+    const full = await api('/api/data?all=1');
+    download(`漫画志_备份_${dayStr()}.json`, JSON.stringify(full, null, 2), 'application/json');
+    toast(`整套备份导出齐了 · ${full.mangas.length} 部漫画`, '齐！');
+  } catch (e) { toast(e.message, '啊！'); }
 }
 function resetImportBtns() {
   state.pendingImport = null;
@@ -1098,12 +1366,15 @@ function onImportFile(ev) {
   file.text().then((txt) => {
     let obj;
     try { obj = JSON.parse(txt); } catch (_) { toast('文件不是合法 JSON', '啊！'); return; }
-    if (!obj || !Array.isArray(obj.tasks)) { toast('缺少 tasks 字段，不是漫画志备份', '啊！'); return; }
+    if (!obj || (!Array.isArray(obj.tasks) && !Array.isArray(obj.mangas))) { toast('缺少 mangas / tasks 字段，不是漫画志备份', '啊！'); return; }
     state.pendingImport = obj;
     const btn = document.querySelector('[data-action="import-backup"]');
     if (btn) {
       btn.classList.add('armed');
-      btn.textContent = `⚠ 确认覆盖（${obj.tasks.length} 话）？`;
+      const count = Array.isArray(obj.mangas)
+        ? `${obj.mangas.length} 部漫画 / ${obj.mangas.reduce((sum, manga) => sum + (manga.tasks || []).length, 0)} 话`
+        : `当前漫画的 ${obj.tasks.length} 话`;
+      btn.textContent = `⚠ 确认覆盖（${count}）？`;
     }
     toast('再点一次「导入备份」确认覆盖', '⚠');
   });
@@ -1114,13 +1385,441 @@ async function confirmImport() {
   try {
     const res = await api('/api/import', { method: 'POST', body: JSON.stringify(obj) });
     resetImportBtns();
-    toast(`已导入 ${res.tasks} 话，覆写完成！`, '齐！');
+    toast(`已导入 ${res.mangas} 部漫画 · ${res.tasks} 话`, '齐！');
     await refresh();
   } catch (e) {
     resetImportBtns();
     toast(e.message, '啊！');
   }
 }
+async function restoreSnapshot(btn) {
+  try {
+    const result = await api('/api/snapshots/restore', { method: 'POST', body: JSON.stringify({ id: btn.dataset.id }) });
+    state.view = 'toc';
+    toast(`快照已恢复 · ${result.tasks} 话${result.missingAssets ? ` · 缺 ${result.missingAssets} 个附件` : ''}`, '復！');
+    await refresh();
+  } catch (e) { toast(e.message, '啊！'); }
+}
+function jumpToTask(taskId, entryId = '') {
+  state.currentId = taskId;
+  state.editEntryId = null;
+  state.view = 'toc';
+  renderAll();
+  requestAnimationFrame(() => {
+    const target = entryId
+      ? [...document.querySelectorAll('[data-eid]')].find((el) => el.dataset.eid === entryId && el.dataset.tid === taskId)
+      : $('.todos');
+    target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+}
+
+/* 日期控件保留原生 input 作为表单数据源，日历面板由页面绘制。 */
+function comicDateInputLabel(input) {
+  if (input.getAttribute('aria-label')) return input.getAttribute('aria-label');
+  const label = input.closest('label');
+  if (label) return [...label.childNodes].filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent.trim()).filter(Boolean).join(' ') || '日期';
+  return input.type === 'date' ? '选择日期' : '选择日期和时间';
+}
+function comicDateParts(input) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}))?$/.exec(input.value);
+  if (!match) return null;
+  return { year: +match[1], month: +match[2] - 1, day: +match[3], hour: +(match[4] || 0), minute: +(match[5] || 0) };
+}
+function comicDateISO(year, month, day) {
+  return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+function comicDateToday() {
+  const now = new Date();
+  return { year: now.getFullYear(), month: now.getMonth(), day: now.getDate(), hour: now.getHours(), minute: now.getMinutes() };
+}
+function syncComicDate(wrapper) {
+  const input = wrapper?.querySelector('.comic-date-native');
+  const trigger = wrapper?.querySelector('.cd-trigger');
+  const value = wrapper?.querySelector('.cd-value');
+  if (!input || !trigger || !value) return;
+  const date = comicDateParts(input);
+  if (!date) {
+    const placeholder = input.type === 'date' ? '选择日期' : '选择日期和时间';
+    value.textContent = placeholder;
+    trigger.setAttribute('aria-label', `${trigger.dataset.label}：${placeholder}`);
+    trigger.disabled = input.disabled;
+    return;
+  }
+  const dateLabel = `${date.year}年${String(date.month + 1).padStart(2, '0')}月${String(date.day).padStart(2, '0')}日`;
+  const fullLabel = input.type === 'date' ? dateLabel : `${dateLabel} · ${String(date.hour).padStart(2, '0')}:${String(date.minute).padStart(2, '0')}`;
+  value.textContent = fullLabel;
+  trigger.setAttribute('aria-label', `${trigger.dataset.label}：${fullLabel}`);
+  trigger.disabled = input.disabled;
+}
+function setComicDateValue(input, value) {
+  input.value = value;
+  const wrapper = input.closest('.comic-date');
+  syncComicDate(wrapper);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+}
+function renderComicCalendar(wrapper) {
+  const input = wrapper.querySelector('.comic-date-native');
+  const popup = wrapper.querySelector('.cd-popup');
+  const selected = comicDateParts(input);
+  const now = comicDateToday();
+  const year = +(wrapper.dataset.viewYear || selected?.year || now.year);
+  const month = +(wrapper.dataset.viewMonth ?? selected?.month ?? now.month);
+  wrapper.dataset.viewYear = String(year);
+  wrapper.dataset.viewMonth = String(month);
+  const monthDate = new Date(year, month, 1);
+  const firstOffset = (monthDate.getDay() + 6) % 7;
+  const gridStart = new Date(year, month, 1 - firstOffset);
+  const todayISO = comicDateISO(now.year, now.month, now.day);
+  const selectedISO = selected ? comicDateISO(selected.year, selected.month, selected.day) : '';
+  const days = Array.from({ length: 42 }, (_, index) => {
+    const day = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + index);
+    const iso = comicDateISO(day.getFullYear(), day.getMonth(), day.getDate());
+    const classes = ['cd-day'];
+    if (day.getMonth() !== month) classes.push('outside');
+    if (iso === todayISO) classes.push('today');
+    if (iso === selectedISO) classes.push('selected');
+    return `<button type="button" class="${classes.join(' ')}" data-calendar="day" data-date="${iso}" aria-label="${day.getFullYear()}年${day.getMonth() + 1}月${day.getDate()}日" aria-pressed="${iso === selectedISO}" tabindex="-1">${day.getDate()}</button>`;
+  }).join('');
+  const time = selected || now;
+  const timeEditor = input.type === 'datetime-local' ? `
+    <div class="cd-time-row">
+      <span class="cd-time-caption">時間</span>
+      <label class="cd-time-field">时<input class="cd-time-part cd-hour" type="number" min="0" max="23" inputmode="numeric" value="${String(time.hour).padStart(2, '0')}" aria-label="小时"></label>
+      <b>:</b>
+      <label class="cd-time-field">分<input class="cd-time-part cd-minute" type="number" min="0" max="59" inputmode="numeric" value="${String(time.minute).padStart(2, '0')}" aria-label="分钟"></label>
+    </div>` : '';
+  popup.innerHTML = `
+    <div class="cd-head">
+      <button type="button" class="cd-nav" data-calendar="month" data-step="-1" aria-label="上个月">‹</button>
+      <strong>${year}年${String(month + 1).padStart(2, '0')}月</strong>
+      <button type="button" class="cd-nav" data-calendar="month" data-step="1" aria-label="下个月">›</button>
+    </div>
+    <div class="cd-weekdays" aria-hidden="true"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div>
+    <div class="cd-grid" role="group" aria-label="日期">${days}</div>
+    ${timeEditor}
+    <div class="cd-footer">
+      <button type="button" class="cd-footer-btn" data-calendar="today">今天</button>
+      <button type="button" class="cd-footer-btn" data-calendar="clear">清除</button>
+      <button type="button" class="cd-footer-btn cd-done" data-calendar="done">完成</button>
+    </div>`;
+}
+function enhanceComicDate(input) {
+  if (!(input instanceof HTMLInputElement) || !['date', 'datetime-local'].includes(input.type) || input.dataset.comicDateEnhanced) return;
+  const label = comicDateInputLabel(input);
+  const wrapper = document.createElement('div');
+  wrapper.className = 'comic-date';
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'cd-trigger';
+  trigger.setAttribute('aria-haspopup', 'dialog');
+  trigger.setAttribute('aria-expanded', 'false');
+  trigger.setAttribute('aria-label', label);
+  trigger.dataset.label = label;
+  trigger.setAttribute('aria-controls', genId('calendar'));
+  const value = document.createElement('span');
+  value.className = 'cd-value';
+  const icon = document.createElement('span');
+  icon.className = 'cd-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.textContent = '▦';
+  trigger.append(value, icon);
+  const popup = document.createElement('div');
+  popup.className = 'cd-popup';
+  popup.id = trigger.getAttribute('aria-controls');
+  popup.setAttribute('role', 'dialog');
+  popup.setAttribute('aria-label', `${label}日历`);
+  popup.hidden = true;
+  input.dataset.comicDateEnhanced = '1';
+  input.classList.add('comic-date-native');
+  input.tabIndex = -1;
+  input.setAttribute('aria-hidden', 'true');
+  input.parentNode.insertBefore(wrapper, input);
+  wrapper.append(trigger, popup, input);
+  syncComicDate(wrapper);
+}
+function closeComicDate(wrapper, returnFocus = false) {
+  if (!wrapper) return;
+  wrapper.classList.remove('open', 'opens-up');
+  const trigger = wrapper.querySelector('.cd-trigger');
+  const popup = wrapper.querySelector('.cd-popup');
+  trigger?.setAttribute('aria-expanded', 'false');
+  if (popup) { popup.hidden = true; popup.style.left = ''; popup.style.maxHeight = ''; }
+  if (returnFocus) trigger?.focus();
+}
+function openComicDate(wrapper) {
+  document.querySelectorAll('.comic-date.open').forEach((other) => { if (other !== wrapper) closeComicDate(other); });
+  document.querySelectorAll('.comic-select.open').forEach((other) => closeComicSelect(other));
+  const input = wrapper.querySelector('.comic-date-native');
+  const popup = wrapper.querySelector('.cd-popup');
+  const selected = comicDateParts(input) || comicDateToday();
+  wrapper.dataset.viewYear = String(selected.year);
+  wrapper.dataset.viewMonth = String(selected.month);
+  renderComicCalendar(wrapper);
+  wrapper.classList.add('open');
+  wrapper.querySelector('.cd-trigger')?.setAttribute('aria-expanded', 'true');
+  popup.hidden = false;
+  wrapper.classList.remove('opens-up');
+  const wrapperBounds = wrapper.getBoundingClientRect();
+  const popupBounds = popup.getBoundingClientRect();
+  const left = Math.max(8, Math.min(popupBounds.left, window.innerWidth - popupBounds.width - 8));
+  popup.style.left = `${left - wrapperBounds.left}px`;
+  const bounds = wrapper.getBoundingClientRect();
+  const popupHeight = Math.min(popup.scrollHeight, 430, window.innerHeight * 0.7);
+  const spaceAbove = Math.max(120, bounds.top - 21);
+  const spaceBelow = Math.max(120, window.innerHeight - bounds.bottom - 21);
+  const opensUp = spaceBelow < popupHeight && spaceAbove > spaceBelow;
+  popup.style.maxHeight = `${Math.min(popupHeight, opensUp ? spaceAbove : spaceBelow)}px`;
+  if (opensUp) wrapper.classList.add('opens-up');
+  popup.querySelector('.cd-day.selected, .cd-day.today')?.focus();
+}
+
+/* 保留原生 select 作为表单数据源，用页面内菜单替代浏览器原生弹层。 */
+function comicSelectLabel(select) {
+  if (select.getAttribute('aria-label')) return select.getAttribute('aria-label');
+  if (select.title) return select.title;
+  const label = select.closest('label');
+  if (label) return [...label.childNodes].filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent.trim()).filter(Boolean).join(' ') || '选择';
+  return '选择';
+}
+function closeComicSelect(wrapper, returnFocus = false) {
+  if (!wrapper) return;
+  wrapper.classList.remove('open');
+  const trigger = wrapper.querySelector('.cs-trigger');
+  const menu = wrapper.querySelector('.cs-menu');
+  trigger?.setAttribute('aria-expanded', 'false');
+  if (menu) menu.hidden = true;
+  if (returnFocus) trigger?.focus();
+}
+function syncComicSelect(select) {
+  if (!select || !select.dataset.comicEnhanced) return;
+  const wrapper = select.closest('.comic-select');
+  const trigger = wrapper?.querySelector('.cs-trigger');
+  const menu = wrapper?.querySelector('.cs-menu');
+  if (!wrapper || !trigger || !menu) return;
+  const selected = select.options[select.selectedIndex];
+  trigger.querySelector('.cs-value').textContent = selected?.textContent || '—';
+  trigger.disabled = select.disabled;
+  menu.replaceChildren();
+  [...select.options].forEach((option, index) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'cs-option';
+    item.setAttribute('role', 'option');
+    item.setAttribute('aria-selected', String(index === select.selectedIndex));
+    item.disabled = option.disabled;
+    item.tabIndex = -1;
+    item.dataset.index = String(index);
+    item.textContent = option.textContent;
+    menu.appendChild(item);
+  });
+}
+function enhanceComicSelect(select) {
+  if (!(select instanceof HTMLSelectElement) || select.dataset.comicEnhanced) return;
+  const label = comicSelectLabel(select);
+  const wrapper = document.createElement('div');
+  wrapper.className = `comic-select${select.id === 'quickTask' ? ' comic-quick' : ''}`;
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'cs-trigger';
+  trigger.setAttribute('role', 'combobox');
+  trigger.setAttribute('aria-haspopup', 'listbox');
+  trigger.setAttribute('aria-expanded', 'false');
+  trigger.setAttribute('aria-label', label);
+  trigger.setAttribute('aria-controls', genId('menu'));
+  const value = document.createElement('span');
+  value.className = 'cs-value';
+  const arrow = document.createElement('span');
+  arrow.className = 'cs-arrow';
+  arrow.setAttribute('aria-hidden', 'true');
+  arrow.textContent = '⌄';
+  trigger.append(value, arrow);
+  const menu = document.createElement('div');
+  menu.className = 'cs-menu';
+  menu.id = trigger.getAttribute('aria-controls');
+  menu.setAttribute('role', 'listbox');
+  menu.setAttribute('aria-label', `${label}选项`);
+  menu.hidden = true;
+  select.dataset.comicEnhanced = '1';
+  select.classList.add('comic-native');
+  select.tabIndex = -1;
+  select.setAttribute('aria-hidden', 'true');
+  select.parentNode.insertBefore(wrapper, select);
+  wrapper.append(trigger, menu, select);
+  syncComicSelect(select);
+}
+function enhanceComicControls(root = document) {
+  if (root instanceof HTMLSelectElement) enhanceComicSelect(root);
+  if (root instanceof HTMLInputElement) enhanceComicDate(root);
+  root.querySelectorAll?.('select').forEach(enhanceComicSelect);
+  root.querySelectorAll?.('input[type="date"], input[type="datetime-local"]').forEach(enhanceComicDate);
+}
+function openComicSelect(wrapper) {
+  document.querySelectorAll('.comic-select.open').forEach((other) => { if (other !== wrapper) closeComicSelect(other); });
+  wrapper.classList.add('open');
+  wrapper.querySelector('.cs-trigger')?.setAttribute('aria-expanded', 'true');
+  const menu = wrapper.querySelector('.cs-menu');
+  menu.hidden = false;
+  wrapper.classList.remove('opens-up');
+  const bounds = wrapper.getBoundingClientRect();
+  const menuHeight = Math.min(menu.scrollHeight, window.innerHeight * 0.48);
+  if (window.innerHeight - bounds.bottom < menuHeight + 12 && bounds.top > window.innerHeight - bounds.bottom) {
+    wrapper.classList.add('opens-up');
+  }
+  const select = wrapper.querySelector('select');
+  const selected = menu.querySelector(`[data-index="${select?.selectedIndex ?? 0}"]`) || menu.querySelector('.cs-option:not(:disabled)');
+  selected?.focus();
+}
+document.addEventListener('click', (ev) => {
+  const trigger = ev.target.closest('.cs-trigger');
+  if (trigger) {
+    const wrapper = trigger.closest('.comic-select');
+    if (wrapper.classList.contains('open')) closeComicSelect(wrapper);
+    else openComicSelect(wrapper);
+    return;
+  }
+  const option = ev.target.closest('.cs-option');
+  if (option) {
+    const wrapper = option.closest('.comic-select');
+    const select = wrapper?.querySelector('select');
+    if (!select || option.disabled) return;
+    select.selectedIndex = +option.dataset.index;
+    syncComicSelect(select);
+    closeComicSelect(wrapper, true);
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    return;
+  }
+  if (!ev.target.closest('.comic-select')) document.querySelectorAll('.comic-select.open').forEach((wrapper) => closeComicSelect(wrapper));
+});
+document.addEventListener('click', (ev) => {
+  const trigger = ev.target.closest('.cd-trigger');
+  if (trigger) {
+    const wrapper = trigger.closest('.comic-date');
+    if (wrapper.classList.contains('open')) closeComicDate(wrapper);
+    else openComicDate(wrapper);
+    return;
+  }
+  const action = ev.target.closest('[data-calendar]');
+  if (action) {
+    const wrapper = action.closest('.comic-date');
+    if (!wrapper) return;
+    const input = wrapper.querySelector('.comic-date-native');
+    const date = comicDateParts(input) || comicDateToday();
+    if (action.dataset.calendar === 'month') {
+      const month = new Date(+wrapper.dataset.viewYear, +wrapper.dataset.viewMonth + +action.dataset.step, 1);
+      wrapper.dataset.viewYear = String(month.getFullYear());
+      wrapper.dataset.viewMonth = String(month.getMonth());
+      renderComicCalendar(wrapper);
+      wrapper.querySelector(`.cd-nav[data-step="${action.dataset.step}"]`)?.focus();
+    } else if (action.dataset.calendar === 'day') {
+      const [year, month, day] = action.dataset.date.split('-').map(Number);
+      const value = comicDateISO(year, month - 1, day);
+      if (input.type === 'date') {
+        setComicDateValue(input, value);
+        closeComicDate(wrapper, true);
+      } else {
+        setComicDateValue(input, `${value}T${String(date.hour).padStart(2, '0')}:${String(date.minute).padStart(2, '0')}`);
+        wrapper.dataset.viewYear = String(year);
+        wrapper.dataset.viewMonth = String(month - 1);
+        renderComicCalendar(wrapper);
+        wrapper.querySelector(`.cd-day[data-date="${value}"]`)?.focus();
+      }
+    } else if (action.dataset.calendar === 'today') {
+      const today = comicDateToday();
+      const value = comicDateISO(today.year, today.month, today.day);
+      setComicDateValue(input, input.type === 'date' ? value : `${value}T${String(today.hour).padStart(2, '0')}:${String(today.minute).padStart(2, '0')}`);
+      closeComicDate(wrapper, true);
+    } else if (action.dataset.calendar === 'clear') {
+      setComicDateValue(input, '');
+      closeComicDate(wrapper, true);
+    } else if (action.dataset.calendar === 'done') closeComicDate(wrapper, true);
+    return;
+  }
+  if (ev.target.closest('.cd-popup')) return;
+  document.querySelectorAll('.comic-date.open').forEach((wrapper) => closeComicDate(wrapper));
+});
+function updateComicDateTime(wrapper) {
+  const input = wrapper?.querySelector('.comic-date-native');
+  if (!input || input.type !== 'datetime-local') return;
+  const current = comicDateParts(input) || comicDateToday();
+  const hourField = wrapper.querySelector('.cd-hour');
+  const minuteField = wrapper.querySelector('.cd-minute');
+  if (!hourField || !minuteField || hourField.value === '' || minuteField.value === '') return;
+  const hour = Math.max(0, Math.min(23, +hourField.value));
+  const minute = Math.max(0, Math.min(59, +minuteField.value));
+  hourField.value = String(hour).padStart(2, '0');
+  minuteField.value = String(minute).padStart(2, '0');
+  const value = `${comicDateISO(current.year, current.month, current.day)}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+  setComicDateValue(input, value);
+}
+document.addEventListener('input', (ev) => {
+  const field = ev.target.closest?.('.cd-time-part');
+  if (field) updateComicDateTime(field.closest('.comic-date'));
+});
+document.addEventListener('change', (ev) => {
+  const field = ev.target.closest?.('.cd-time-part');
+  if (field) updateComicDateTime(field.closest('.comic-date'));
+});
+document.addEventListener('keydown', (ev) => {
+  const day = ev.target.closest?.('.cd-day');
+  const popup = ev.target.closest?.('.cd-popup');
+  const wrapper = (day || popup)?.closest('.comic-date');
+  if (!wrapper) return;
+  if (ev.key === 'Escape') {
+    ev.preventDefault(); closeComicDate(wrapper, true); return;
+  }
+  if (ev.key === 'Tab') { closeComicDate(wrapper, true); return; }
+  if (!day) return;
+  const delta = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 }[ev.key];
+  const current = new Date(`${day.dataset.date}T12:00:00`);
+  let next;
+  if (delta) next = new Date(current.getFullYear(), current.getMonth(), current.getDate() + delta);
+  else if (ev.key === 'Home' || ev.key === 'End') {
+    const offset = (current.getDay() + 6) % 7;
+    next = new Date(current.getFullYear(), current.getMonth(), current.getDate() + (ev.key === 'Home' ? -offset : 6 - offset));
+  } else return;
+  ev.preventDefault();
+  wrapper.dataset.viewYear = String(next.getFullYear());
+  wrapper.dataset.viewMonth = String(next.getMonth());
+  renderComicCalendar(wrapper);
+  const iso = comicDateISO(next.getFullYear(), next.getMonth(), next.getDate());
+  wrapper.querySelector(`.cd-day[data-date="${iso}"]`)?.focus();
+});
+document.addEventListener('keydown', (ev) => {
+  const trigger = ev.target.closest?.('.cs-trigger');
+  const option = ev.target.closest?.('.cs-option');
+  const wrapper = (trigger || option)?.closest('.comic-select');
+  if (!wrapper) return;
+  const options = [...wrapper.querySelectorAll('.cs-option:not(:disabled)')];
+  if (trigger && ['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(ev.key)) {
+    if (!wrapper.classList.contains('open')) { ev.preventDefault(); openComicSelect(wrapper); }
+    return;
+  }
+  if (!option) return;
+  const at = options.indexOf(option);
+  if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+    ev.preventDefault();
+    options[Math.max(0, Math.min(options.length - 1, at + (ev.key === 'ArrowDown' ? 1 : -1)))]?.focus();
+  } else if (ev.key === 'Home' || ev.key === 'End') {
+    ev.preventDefault();
+    (ev.key === 'Home' ? options[0] : options.at(-1))?.focus();
+  } else if (ev.key === 'Escape') {
+    ev.preventDefault(); closeComicSelect(wrapper, true);
+  } else if (ev.key === 'Tab') {
+    closeComicSelect(wrapper, true);
+  }
+});
+const comicSelectObserver = new MutationObserver((records) => {
+  for (const record of records) {
+    if (record.target instanceof HTMLSelectElement) syncComicSelect(record.target);
+    for (const node of record.addedNodes) {
+      if (node.nodeType !== Node.ELEMENT_NODE) continue;
+      enhanceComicControls(node);
+    }
+  }
+});
+enhanceComicControls();
+comicSelectObserver.observe(document.body, { childList: true, subtree: true });
 
 /* ---------------- 事件绑定 ---------------- */
 document.addEventListener('click', (ev) => {
@@ -1135,9 +1834,14 @@ document.addEventListener('click', (ev) => {
   } else if (act === 'new-task') openTaskModal(null);
   else if (act === 'edit-task') openTaskModal(currentTask());
   else if (act === 'close-modal') closeTaskModal();
+  else if (act === 'close-manga-modal') closeMangaModal();
   else if (act === 'del-task') deleteTask(el);
   else if (act === 'edit-entry') editEntry(el);
   else if (act === 'del-entry') deleteEntry(el);
+  else if (act === 'open-related' || act === 'open-inbox-entry') jumpToTask(el.dataset.tid, el.dataset.eid);
+  else if (act === 'open-inbox-todo') jumpToTask(el.dataset.tid);
+  else if (act === 'restore-snapshot') restoreSnapshot(el);
+  else if (act === 'clear-timeline-filters') { state.timelineFilters = { host: '', kind: '', result: '', from: '', to: '' }; renderStage(); }
   else if (act === 'cancel-edit-entry') { state.editEntryId = null; renderStage(); }
   else if (act === 'del-todo') deleteTodo(el);
   else if (act === 'filter-status') {
@@ -1208,6 +1912,10 @@ document.addEventListener('input', (ev) => {
 /* 选择图片 / 文档文件 */
 document.addEventListener('change', (ev) => {
   if (ev.target.classList && ev.target.classList.contains('todo-check')) toggleTodo(ev.target);
+  if (ev.target.dataset && ev.target.dataset.timelineFilter) {
+    state.timelineFilters[ev.target.dataset.timelineFilter] = ev.target.value;
+    renderStage();
+  }
   if (ev.target.id === 'imgFile' && ev.target.files && ev.target.files.length) {
     handleFiles(ev.target.files);
     ev.target.value = '';
@@ -1238,21 +1946,36 @@ document.addEventListener('drop', (ev) => {
 $('#lightbox').addEventListener('click', closeLightbox);
 $('#filePreview').addEventListener('click', (ev) => { if (ev.target === ev.currentTarget) closePreview(); });
 $('#pvClose').addEventListener('click', closePreview);
-document.addEventListener('change', (ev) => {
-  if (ev.target.classList && ev.target.classList.contains('todo-check')) toggleTodo(ev.target);
-});
+$('#pvCompareRun').addEventListener('click', comparePreviewFiles);
 document.addEventListener('submit', (ev) => {
   if (ev.target.id === 'todoForm') { ev.preventDefault(); addTodo(ev.target); }
 });
 
 $('#taskForm').addEventListener('submit', onTaskSubmit);
+$('#taskForm').elements.template.addEventListener('change', (ev) => {
+  const form = $('#taskForm');
+  const oldTitle = form.title.dataset.templateTitle || '';
+  const template = WORKFLOW_TEMPLATES[ev.target.value];
+  if (template && (!form.title.value.trim() || form.title.value === oldTitle)) form.title.value = template.title;
+  if (!template && form.title.value === oldTitle) form.title.value = '';
+  form.title.dataset.templateTitle = template?.title || '';
+  updateTemplateHint(ev.target.value, form);
+});
 $('#btnNewTask').addEventListener('click', () => openTaskModal(null));
+$('#btnNewManga').addEventListener('click', () => openMangaModal());
+$('#btnRenameManga').addEventListener('click', () => {
+  const manga = (state.data.mangas || []).find((item) => item.id === state.activeMangaId);
+  if (manga) openMangaModal(manga);
+});
+$('#mangaSelect').addEventListener('change', (ev) => switchManga(ev.target.value));
+$('#mangaForm').addEventListener('submit', onMangaSubmit);
 $('#btnExport').addEventListener('click', exportMd);
 $('#btnLogout').addEventListener('click', async () => {
   try { await fetch('/api/logout', { method: 'POST', headers: { 'X-Requested-With': 'manga-log' } }); } catch (_) { /* 忽略 */ }
   location.href = '/';
 });
 $('#modal').addEventListener('click', (ev) => { if (ev.target === ev.currentTarget) closeTaskModal(); });
+$('#mangaModal').addEventListener('click', (ev) => { if (ev.target === ev.currentTarget) closeMangaModal(); });
 $('#importFile').addEventListener('change', onImportFile);
 $('#quickForm').addEventListener('submit', onQuickSubmit);
 $('#quickInput').addEventListener('input', updateQuickKind);
@@ -1262,6 +1985,8 @@ $('#quickTask').addEventListener('change', (ev) => {
   renderToc(); renderStage();
 });
 $('#tabToc').addEventListener('click', () => { state.view = 'toc'; renderTabs(); renderStage(); });
+$('#tabTimeline').addEventListener('click', () => { state.view = 'timeline'; renderTabs(); renderStage(); });
+$('#tabInbox').addEventListener('click', () => { state.view = 'inbox'; renderTabs(); renderStage(); });
 $('#tabStats').addEventListener('click', () => { state.view = 'stats'; renderTabs(); renderStage(); });
 $('#search').addEventListener('input', (ev) => {
   state.query = ev.target.value;
@@ -1271,6 +1996,7 @@ $('#search').addEventListener('input', (ev) => {
 document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Escape') {
     closeTaskModal();
+    closeMangaModal();
     closeLightbox();
     closePreview();
     return;
@@ -1279,8 +2005,12 @@ document.addEventListener('keydown', (ev) => {
     $('#taskForm').requestSubmit();
     return;
   }
+  if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter' && !$('#mangaModal').classList.contains('hidden')) {
+    $('#mangaForm').requestSubmit();
+    return;
+  }
   const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName);
-  if (inField || !$('#modal').classList.contains('hidden')) return;
+  if (inField || !$('#modal').classList.contains('hidden') || !$('#mangaModal').classList.contains('hidden')) return;
   if (ev.key === 'n' || ev.key === 'N') { ev.preventDefault(); openTaskModal(null); }
   else if (ev.key === '/') {
     ev.preventDefault();

@@ -44,6 +44,14 @@
     <span class="barcode" aria-hidden="true"></span>
   </div>
 
+  <div class="manga-bar" aria-label="漫画管理">
+    <label class="manga-picker" for="mangaSelect"><span class="manga-picker-label">正在阅读</span>
+      <select id="mangaSelect" aria-label="切换漫画"></select>
+    </label>
+    <button id="btnRenameManga" class="btn-tiny rs" type="button" title="修改漫画名">✎ 改名</button>
+    <button id="btnNewManga" class="btn-tiny rs" type="button">＋ 新漫画</button>
+  </div>
+
   <form id="quickForm" class="quickbar" title="快记一笔：写入所选的话，类型按关键词自动识别">
     <span class="qb-sfx" aria-hidden="true">⚡</span>
     <input id="quickInput" class="qb-input" type="text" maxlength="120" autocomplete="off" placeholder="快记一笔：一句话改动，回车入格…">
@@ -56,6 +64,8 @@
     <aside class="toc">
       <div class="toc-head">
         <button id="tabToc" class="vtab active" type="button">目次</button>
+        <button id="tabTimeline" class="vtab" type="button">时间线</button>
+        <button id="tabInbox" class="vtab" type="button">待验证</button>
         <button id="tabStats" class="vtab" type="button">卷末统计</button>
         <span class="en mono" id="tocEn">CONTENTS</span>
       </div>
@@ -74,11 +84,38 @@
   </footer>
 </div>
 
+<!-- 新建 / 重命名漫画 -->
+<div id="mangaModal" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="mangaModalTitle">
+  <div class="modal manga-modal">
+    <h3 id="mangaModalTitle" class="modal-title">新的一部漫画</h3>
+    <form id="mangaForm">
+      <label class="lb">漫画名 <em>*</em>
+        <input class="ipt rs" name="title" type="text" maxlength="80" placeholder="如：订单服务改动" required>
+      </label>
+      <div class="form-foot">
+        <span class="hint mono">回车保存 · ESC 取消</span>
+        <button type="button" class="btn rs" data-action="close-manga-modal">先不了</button>
+        <button type="submit" class="btn primary rs">收进书架</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <!-- 新建 / 编辑任务 -->
 <div id="modal" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
   <div class="modal r2">
     <h3 id="modalTitle" class="modal-title">新的一话</h3>
     <form id="taskForm">
+      <label class="lb template-field">流程模板
+        <select class="ipt rs" name="template">
+          <option value="custom">自定义</option>
+          <option value="release">版本发布</option>
+          <option value="certificate">证书续期</option>
+          <option value="database">数据库变更</option>
+          <option value="incident">故障排查</option>
+        </select>
+        <span class="hint template-hint" id="templateHint">选择模板会预填检查清单，可按实际情况修改。</span>
+      </label>
       <label class="lb">话数标题 <em>*</em>
         <input class="ipt rs" name="title" type="text" maxlength="120" placeholder="如：Nginx 证书更换" required>
       </label>
@@ -120,6 +157,12 @@
       <span class="flex"></span>
       <a id="pvDownload" class="btn rs" download title="下载原文件">⇩ 下载</a>
       <button id="pvClose" class="btn-icon" title="关闭预览 (Esc)">✕</button>
+    </div>
+    <div class="pv-compare hidden" id="pvCompare">
+      <span class="mono">配置差异</span>
+      <select id="pvCompareFile" class="ipt rs" aria-label="选择另一个配置文件"></select>
+      <button id="pvCompareRun" class="btn rs" type="button">⇄ 比较这两个版本</button>
+      <span class="hint">并排查看新增与删除行</span>
     </div>
     <div id="pvBody" class="pv-body"><div class="pv-note">读取中…</div></div>
   </div>

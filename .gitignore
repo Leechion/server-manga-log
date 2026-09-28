@@ -2,6 +2,7 @@
 data.json
 data.json.*
 data.json.conflict-*
+.backups/
 uploads/
 config.json
 manga_code.txt

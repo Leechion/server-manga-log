@@ -1,6 +1,7 @@
 # 隐私与数据（绝不入库）
 data.json
 data.json.*
+data.json.conflict-*
 uploads/
 config.json
 manga_code.txt
@@ -13,5 +14,9 @@ server.pid
 *.log
 node_modules/
 .DS_Store
+# 本地开发工具（只在本机用，不入库）
+dev.ps1
+push.ps1
+.ps-output/
 __pycache__/
 *.pyc

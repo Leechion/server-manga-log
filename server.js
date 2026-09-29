@@ -72,7 +72,38 @@ function normalizeUsers(raw) {
   return out;
 }
 const USERS = normalizeUsers(CFG.users);
-const MULTI = USERS.length > 0;
+/* 自助注册：config.json（或环境变量）设置 inviteCode 后开放；
+ * 注册的账号持久化在 users-registered.json（不入库），与 config users 合并生效。 */
+const INVITE_CODE = String(process.env.INVITE_CODE ?? CFG.inviteCode ?? '').trim();
+const USERS_FILE = path.join(ROOT, 'users-registered.json');
+function loadRegisteredUsers() {
+  try {
+    const arr = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
+    if (!Array.isArray(arr)) return [];
+    const seen = new Set(USERS.map((u) => u.name));
+    const out = [];
+    for (const u of arr) {
+      const name = String(u && u.name || '').trim().toLowerCase();
+      const code = String(u && u.code || '').trim();
+      if (!/^[a-z0-9_-]{1,32}$/.test(name) || !code || seen.has(name)) continue;
+      seen.add(name);
+      out.push({ name, code, createdAt: String(u.createdAt || '').slice(0, 30) });
+    }
+    return out;
+  } catch (_) { return []; }
+}
+function appendRegisteredUser(name, code) {
+  const list = loadRegisteredUsers();
+  list.push({ name, code, createdAt: new Date().toISOString() });
+  const tmp = `${USERS_FILE}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(list, null, 2), 'utf8');
+  fs.renameSync(tmp, USERS_FILE);
+}
+function allUsers() {
+  return [...USERS, ...loadRegisteredUsers().filter((u) => !USERS.some((x) => x.name === u.name))];
+}
+const REGISTER_OPEN = Boolean(INVITE_CODE);
+const MULTI = USERS.length > 0 || REGISTER_OPEN;
 if (MULTI && ACCESS_CODE) console.warn('[!] 多用户模式已启用，accessCode 将被忽略（登录按用户口令校验）。');
 
 const KINDS = ['配置', '代码', '部署', '修复', '排查', '回滚', '其他'];
@@ -560,7 +591,7 @@ function verifyToken(tok) {
   const want = crypto.createHmac('sha256', AUTH_SECRET).update(`v1.${name}.${exp}`).digest('hex');
   if (!safeEqual(sig, want)) return null;
   if (!(Number(exp) > Math.floor(Date.now() / 1000))) return null;
-  return USERS.some((u) => u.name === name) ? name : null;
+  return allUsers().some((u) => u.name === name) ? name : null;
 }
 function sessionUser(req) {
   return MULTI ? verifyToken(getCookie(req, 'auth')) : null;
@@ -600,33 +631,58 @@ function failRecord(ip) {
   }
   return rec;
 }
-function serveLogin(res, multi) {
+function serveLogin(res, multi, registerOpen) {
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
   const userField = multi
     ? `<input id="user" type="text" autocomplete="username" autocapitalize="off" placeholder="用户名…" style="flex:1;font-size:16px;padding:9px 12px;border:2px solid #161513;background:#fbf8f0;border-radius:14px 5px 16px 6px/6px 16px 5px 14px;outline:none;font-family:inherit;margin-bottom:10px;">`
     : '';
-  const subtitle = multi ? 'SERVER MANGA LOG · 登录后只看到自己的记录' : 'SERVER MANGA LOG · 口令确认后开演';
+  const inviteField = (multi && registerOpen)
+    ? `<input id="invite" type="text" autocapitalize="off" placeholder="邀请码…" style="flex:1;font-size:15px;padding:9px 12px;border:2px dashed #161513;background:#fbf8f0;border-radius:14px 5px 16px 6px/6px 16px 5px 14px;outline:none;font-family:inherit;margin-bottom:10px;display:none;">`
+    : '';
+  const subtitle = multi
+    ? (registerOpen ? 'SERVER MANGA LOG · 登录或注册，只看到自己的记录' : 'SERVER MANGA LOG · 登录后只看到自己的记录')
+    : 'SERVER MANGA LOG · 口令确认后开演';
+  const toggle = (multi && registerOpen)
+    ? `<div style="margin-top:12px;font-size:13.5px;"><a href="#" id="toggleMode" style="color:#161513;">没有账号？注册一个 →</a></div>`
+    : '';
   res.end(`<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>验明正身 · 漫画志</title></head>
 <body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#efe9da;background-image:radial-gradient(circle,rgba(22,21,19,.08) 1px,transparent 1.4px);background-size:7px 7px;font-family:KaiTi,'楷体',STKaiti,serif;color:#161513;">
 <div style="background:#f6f2e8;border:2.5px solid #161513;border-radius:255px 15px 225px 15px/15px 225px 15px 255px;box-shadow:8px 8px 0 rgba(22,21,19,.85);padding:38px 44px;max-width:420px;transform:rotate(-.6deg);text-align:center;">
 <div style="font-family:KaiTi,serif;font-size:34px;letter-spacing:6px;">验明正身</div>
 <div style="font-size:13px;color:rgba(22,21,19,.55);letter-spacing:3px;margin:4px 0 20px;">${subtitle}</div>
-<form id="f" style="display:flex;flex-wrap:wrap;gap:10px;">
-${userField}<input id="code" type="password" autofocus placeholder="输入口令…" style="flex:1;font-size:16px;padding:9px 12px;border:2px solid #161513;background:#fbf8f0;border-radius:14px 5px 16px 6px/6px 16px 5px 14px;outline:none;font-family:inherit;">
+<form id="f" style="display:flex;flex-direction:column;gap:10px;">
+${multi ? userField : ''}
+${inviteField}
+<input id="code" type="password" autofocus placeholder="${multi ? '口令…' : '输入口令…'}" style="flex:1;font-size:16px;padding:9px 12px;border:2px solid #161513;background:#fbf8f0;border-radius:14px 5px 16px 6px/6px 16px 5px 14px;outline:none;font-family:inherit;">
 <button style="border:2px solid #161513;background:#161513;color:#f6f2e8;font-weight:700;font-size:15px;letter-spacing:2px;padding:8px 16px;border-radius:14px 5px 16px 6px/6px 16px 5px 14px;box-shadow:3px 3px 0 rgba(22,21,19,.4);cursor:pointer;font-family:inherit;">开演</button>
 </form>
 <div id="msg" style="margin-top:14px;font-size:13.5px;min-height:20px;color:#161513;"></div>
+${toggle}
 </div>
 <script>
+const MULTI = ${multi ? 'true' : 'false'};
+const REGISTER_OPEN = ${registerOpen ? 'true' : 'false'};
+const box = document.getElementById('f');
+const invite = document.getElementById('invite');
+const toggle = document.getElementById('toggleMode');
+let mode = 'login';
+if (toggle) toggle.addEventListener('click', (ev) => {
+  ev.preventDefault();
+  mode = mode === 'login' ? 'register' : 'login';
+  if (invite) invite.style.display = mode === 'register' ? 'block' : 'none';
+  toggle.textContent = mode === 'register' ? '已有账号？返回登录 →' : '没有账号？注册一个 →';
+});
 document.getElementById('f').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const msg = document.getElementById('msg');
   const userEl = document.getElementById('user');
   const payload = { code: document.getElementById('code').value };
-  if (userEl) payload.name = userEl.value;
+  if (userEl && userEl.style.display !== 'none') payload.name = userEl.value;
+  if (mode === 'register' && invite) payload.invite = invite.value;
+  const endpoint = (mode === 'register' && REGISTER_OPEN && MULTI) ? '/api/register' : '/api/login';
   try {
-    const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'manga-log' }, body: JSON.stringify(payload) });
+    const r = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'manga-log' }, body: JSON.stringify(payload) });
     const b = await r.json().catch(() => ({}));
     if (r.ok) { location.href = '/'; return; }
     msg.textContent = b.error || '口令不对';
@@ -1008,7 +1064,7 @@ async function handler(req, res) {
         const name = String(body.name || '').trim().toLowerCase();
         const bucket = `${clientIp(req)}|${name}`;
         if (failRecord(bucket).n >= 20) return json(res, 429, { error: '错太多次了，休息 5 分钟再来' });
-        const account = USERS.find((u) => u.name === name);
+        const account = allUsers().find((u) => u.name === name);
         if (account && safeEqual(String(body.code || '').trim(), account.code)) {
           loginFails.delete(bucket);
           res.writeHead(200, {
@@ -1019,6 +1075,34 @@ async function handler(req, res) {
         }
         failRecord(bucket).n += 1;
         return json(res, 401, { error: '用户名或口令不对' });
+      }
+      /* ---- 自助注册：设置 inviteCode 后开放，邀请码不对限次尝试 ---- */
+      if (pathname === '/api/register' && methodM === 'POST') {
+        if (!REGISTER_OPEN) return json(res, 403, { error: '注册未开放，请联系管理员开通账号' });
+        if (req.headers['x-requested-with'] !== 'manga-log') return json(res, 403, { error: '跨站请求已拒绝' });
+        const ct = String(req.headers['content-type'] || '');
+        if (!ct.includes('application/json')) return json(res, 415, { error: '仅接受 application/json 请求' });
+        let body = {};
+        try { body = await readBody(req, 4096); } catch (_) { body = {}; }
+        const bucket = `reg:${clientIp(req)}`;
+        if (failRecord(bucket).n >= 10) return json(res, 429, { error: '尝试太多次了，休息 5 分钟再来' });
+        if (!safeEqual(String(body.invite || '').trim(), INVITE_CODE)) {
+          failRecord(bucket).n += 1;
+          return json(res, 403, { error: '邀请码不对' });
+        }
+        const name = String(body.name || '').trim().toLowerCase();
+        const code = String(body.code || '').trim();
+        if (!/^[a-z0-9_-]{1,32}$/.test(name)) return json(res, 400, { error: '用户名限小写字母/数字/-/_，1-32 位' });
+        if (code.length < 6 || code.length > 64) return json(res, 400, { error: '口令长度需在 6-64 位之间' });
+        if (allUsers().some((u) => u.name === name)) return json(res, 409, { error: '用户名已被使用' });
+        try { appendRegisteredUser(name, code); }
+        catch (_) { return json(res, 500, { error: '注册写入失败，请稍后再试' }); }
+        loginFails.delete(bucket);
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Set-Cookie': authCookie(signToken(name), 30 * 86400),
+        });
+        return res.end('{"ok":true,"registered":true}');
       }
       if (!user) {
         if (pathname.startsWith('/api/') && pathname !== '/api/logout') return json(res, 401, { error: '未登录或会话已失效' });
@@ -1141,7 +1225,7 @@ function listen(port, triesLeft) {
     const showHost = BIND_HOST === '0.0.0.0' || BIND_HOST === '::' ? `http://<本机IP>:${port}` : `http://${BIND_HOST}:${port}`;
     const line = '─'.repeat(46);
     const modeLabel = MULTI ? '多用户' : '口令锁';
-    const modeText = MULTI ? `${USERS.length} 人` : (ACCESS_CODE ? '已启用' : '未启用');
+    const modeText = MULTI ? `${allUsers().length} 人` : (ACCESS_CODE ? '已启用' : '未启用');
     const dataText = MULTI ? './users/<用户>/data.json' : './data.json';
     console.log('');
     console.log(`  ┌${line}┐`);

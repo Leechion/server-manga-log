@@ -1107,7 +1107,7 @@ async function handler(req, res) {
       if (!user) {
         if (pathname.startsWith('/api/') && pathname !== '/api/logout') return json(res, 401, { error: '未登录或会话已失效' });
         if (pathname.startsWith('/uploads/')) return json(res, 401, { error: '未登录或会话已失效' });
-        if (pathname === '/login') return serveLogin(res, true);
+        if (pathname === '/login') return serveLogin(res, true, REGISTER_OPEN);
         res.writeHead(302, { Location: '/login' });
         return res.end();
       }

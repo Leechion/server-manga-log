@@ -1084,9 +1084,12 @@ async function handler(req, res) {
         if (!ct.includes('application/json')) return json(res, 415, { error: '仅接受 application/json 请求' });
         let body = {};
         try { body = await readBody(req, 4096); } catch (_) { body = {}; }
+        /* 限流只拦「邀请码错误」的尝试，且必须先验码再判锁：
+         * 否则攻击者用错码打满桶就能把该 IP 的合法注册者一起锁在门外（注册入口拒绝服务）。
+         * 邀请码正确者一律放行——错码尝试记在 `reg:` 桶，与登录计数互不影响。 */
         const bucket = `reg:${clientIp(req)}`;
-        if (failRecord(bucket).n >= 10) return json(res, 429, { error: '尝试太多次了，休息 5 分钟再来' });
         if (!safeEqual(String(body.invite || '').trim(), INVITE_CODE)) {
+          if (failRecord(bucket).n >= 10) return json(res, 429, { error: '尝试太多次了，休息 5 分钟再来' });
           failRecord(bucket).n += 1;
           return json(res, 403, { error: '邀请码不对' });
         }

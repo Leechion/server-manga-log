@@ -886,9 +886,6 @@ async function handler(req, res) {
     }
     /* 内网免口令用户访问 /login：不需要登录页，直接回主页 */
     if (ACCESS_CODE && pathname === '/login') { res.writeHead(302, { Location: '/' }); return res.end(); }
-    if (pathname === '/api/upload/doc' && req.method.toUpperCase() === 'POST') {
-      return await handleDocUpload(req, res, u.searchParams);
-    }
     if (pathname.startsWith('/api/')) {
       const method = req.method.toUpperCase();
       /* ---- CSRF 防护 ----
@@ -897,21 +894,23 @@ async function handler(req, res) {
        * 属于「简单请求」，跨站时不经 preflight 直达服务端。
        * 因此写操作强制要求自定义头 X-Requested-With：
        * 自定义头必定触发 preflight，未授权的跨站 preflight 会被浏览器拒绝。
-       * 另外，带请求体的方法还要求 JSON Content-Type，
-       * 以免 text/plain 之类的简单请求体被当作 JSON 解析。
-       * DELETE 通常无请求体，故只校验自定义头。 */
+       * 带请求体的方法还要求 JSON Content-Type——文档上传走原始二进制除外，
+       * 但同样必须携带 X-Requested-With（含文档上传的 CSRF 修复）。 */
       if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(method)) {
         if (req.headers['x-requested-with'] !== 'manga-log') {
           return json(res, 403, { error: '跨站请求已拒绝' });
         }
         const hasBody = method !== 'DELETE';
-        const isDocUpload = pathname === '/api/upload/doc';
-        if (hasBody && !isDocUpload) {
+        if (hasBody && pathname !== '/api/upload/doc') {
           const ct = String(req.headers['content-type'] || '');
           if (!ct.includes('application/json')) {
             return json(res, 415, { error: '仅接受 application/json 请求' });
           }
         }
+      }
+      /* 文档上传：原始二进制 + ?name= 文件名（经上方 CSRF 校验后分发，读原始体而非 JSON） */
+      if (pathname === '/api/upload/doc' && method === 'POST') {
+        return await handleDocUpload(req, res, u.searchParams);
       }
       for (const [m, re, fn] of routes) {
         if (m !== method) continue;

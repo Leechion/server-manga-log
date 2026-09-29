@@ -15,11 +15,14 @@ const PUBLIC_DIR = path.join(ROOT, 'public');
 const DATA_FILE = path.join(ROOT, 'data.json');
 const UPLOAD_DIR = path.join(ROOT, 'uploads');
 const SNAPSHOT_DIR = path.join(ROOT, '.backups');
+const USERS_DIR = path.join(ROOT, 'users');
 const SNAPSHOT_LIMIT = 40;
 
 /* 可选 config.json：
  * { "accessCode": "口令", "host": "127.0.0.1", "port": 4780,
- *   "trustProxy": false, "secureCookie": false }（环境变量 ACCESS_CODE/HOST/PORT/TRUST_PROXY/SECURE_COOKIE 优先） */
+ *   "users": [{ "name": "alice", "code": "alice 的口令" }],
+ *   "trustProxy": false, "secureCookie": false }
+ * （环境变量 ACCESS_CODE/HOST/PORT/TRUST_PROXY/SECURE_COOKIE 优先；users 非空即进入多用户模式） */
 function loadConfig() {
   let raw = '';
   try { raw = fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'); }
@@ -45,6 +48,32 @@ const flagOf = (envVal, cfgVal) => (envVal != null ? /^(1|true|yes)$/i.test(Stri
 const TRUST_PROXY = flagOf(process.env.TRUST_PROXY, CFG.trustProxy);
 /* 会话 Cookie 加 Secure：外层是 HTTPS 隧道/反代时开启，防口令会话被降级窃听 */
 const SECURE_COOKIE = flagOf(process.env.SECURE_COOKIE, CFG.secureCookie);
+
+/* ---------------- 多用户模式 ----------------
+ * config.users 非空即启用：每个账号在 users/<name>/ 下拥有独立的
+ * data.json / uploads/ / .backups/，登录颁发签名会话 Cookie，互相完全隔离。
+ * 多用户模式下 ACCESS_CODE 与内网免口令均不生效（身份必须明确）。 */
+function normalizeUsers(raw) {
+  if (raw == null) return [];
+  if (!Array.isArray(raw)) { console.error('[x] config.json 的 users 必须是数组。'); process.exit(1); }
+  const out = [];
+  const seen = new Set();
+  for (const u of raw) {
+    const name = String((u && u.name) || '').trim().toLowerCase();
+    const code = String((u && u.code) || '').trim();
+    if (!/^[a-z0-9_-]{1,32}$/.test(name) || !code) {
+      console.error('[x] users 配置无效：每项需要 name（小写字母/数字/-/_，1-32 位）和 code（非空口令）。出错项：', JSON.stringify(u));
+      process.exit(1);
+    }
+    if (seen.has(name)) { console.error(`[x] users 用户名重复：${name}`); process.exit(1); }
+    seen.add(name);
+    out.push({ name, code });
+  }
+  return out;
+}
+const USERS = normalizeUsers(CFG.users);
+const MULTI = USERS.length > 0;
+if (MULTI && ACCESS_CODE) console.warn('[!] 多用户模式已启用，accessCode 将被忽略（登录按用户口令校验）。');
 
 const KINDS = ['配置', '代码', '部署', '修复', '排查', '回滚', '其他'];
 const RESULTS = ['成功', '失败', '待验证'];
@@ -133,17 +162,29 @@ function allTasksOf(store) {
   if (store && Array.isArray(store.mangas)) return store.mangas.flatMap((m) => Array.isArray(m.tasks) ? m.tasks : []);
   return store && Array.isArray(store.tasks) ? store.tasks : [];
 }
-function loadData() {
+/* 一个 store = 一份彼此独立的数据域：
+ * 单用户模式用 DEFAULT_STORE（仓根 data.json / uploads / .backups），
+ * 多用户模式每个账号一份 users/<name>/ 下的 store。 */
+function newUserStoreData(store) {
+  const now = new Date().toISOString();
+  return {
+    version: 2,
+    seededAt: now,
+    activeMangaId: 'm_1',
+    mangas: [{ id: 'm_1', title: `${store.name} 的记录`, createdAt: now, tasks: [] }],
+  };
+}
+function loadStoreData(store, seed) {
   try {
-    const parsed = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    const parsed = JSON.parse(fs.readFileSync(store.dataFile, 'utf8'));
     return normalizeStoredData(parsed);
   } catch (e) {
-    if (fs.existsSync(DATA_FILE)) {
-      try { fs.renameSync(DATA_FILE, `${DATA_FILE}.bak-${Date.now()}`); } catch (_) { /* 忽略备份失败 */ }
-      console.warn('[!] data.json 无法解析，已备份为 .bak 文件并重建示例数据。');
+    if (fs.existsSync(store.dataFile)) {
+      try { fs.renameSync(store.dataFile, `${store.dataFile}.bak-${Date.now()}`); } catch (_) { /* 忽略备份失败 */ }
+      console.warn(`[!] ${path.basename(store.dataFile)}（${store.name || '单用户'}）无法解析，已备份为 .bak 文件并重建。`);
     }
-    const fresh = seedData();
-    try { saveData(fresh); } catch (_) { /* 首次写盘失败不致命 */ }
+    const fresh = seed();
+    try { saveData(store, fresh); } catch (_) { /* 首次写盘失败不致命 */ }
     return fresh;
   }
 }
@@ -153,23 +194,21 @@ function loadData() {
  * 说明有别的程序（如 import_history.py）也在写同一个文件。此时**不静默合并**
  * —— 合并无法区分「外部新增」与「本进程删除」，会把手动删掉的记录又复活。
  * 改为：先备份外部版本，再以本进程内存为准落盘，并明确告警，把处置权交还用户。 */
-let lastMtimeMs = 0;
-let lastDailySnapDay = '';
-function saveData(d) {
+function saveData(store, d) {
   try {
-    const st = fs.statSync(DATA_FILE);
+    const st = fs.statSync(store.dataFile);
     const today = dayStr();
-    if (lastDailySnapDay !== today) {
-      const daily = hasSnapshotForDay(today) || createSnapshot('daily');
-      if (daily) lastDailySnapDay = today;
+    if (store.lastDailySnapDay !== today) {
+      const daily = hasSnapshotForDay(store, today) || createSnapshot(store, 'daily');
+      if (daily) store.lastDailySnapDay = today;
     }
-    if (lastMtimeMs && st.mtimeMs !== lastMtimeMs) {
+    if (store.lastMtimeMs && st.mtimeMs !== store.lastMtimeMs) {
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const conflictPath = `${DATA_FILE}.conflict-${stamp}`;
+      const conflictPath = `${store.dataFile}.conflict-${stamp}`;
       try {
-        fs.copyFileSync(DATA_FILE, conflictPath);
-        createSnapshot('external-edit');
-        console.warn('[!] 检测到 data.json 被其他程序改动过。');
+        fs.copyFileSync(store.dataFile, conflictPath);
+        createSnapshot(store, 'external-edit');
+        console.warn(`[!] 检测到 ${path.basename(store.dataFile)} 被其他程序改动过。`);
         console.warn(`    已把外部版本另存为 ${path.basename(conflictPath)}，本次以当前内存状态落盘。`);
         console.warn('    若外部版本里有需要保留的记录，请用界面上的「⇒ 导入备份」导入该文件。');
       } catch (e) {
@@ -177,36 +216,38 @@ function saveData(d) {
       }
     }
   } catch (_) { /* 文件尚不存在（首次写入） */ }
-  const tmp = `${DATA_FILE}.tmp`;
+  const tmp = `${store.dataFile}.tmp`;
+  /* 多用户首次写入时 users/<name>/ 还不存在，先建目录再落盘 */
+  fs.mkdirSync(path.dirname(store.dataFile), { recursive: true });
   fs.writeFileSync(tmp, JSON.stringify(d, null, 2), 'utf8');
-  fs.renameSync(tmp, DATA_FILE);
-  try { lastMtimeMs = fs.statSync(DATA_FILE).mtimeMs; } catch (_) { lastMtimeMs = 0; }
+  fs.renameSync(tmp, store.dataFile);
+  try { store.lastMtimeMs = fs.statSync(store.dataFile).mtimeMs; } catch (_) { store.lastMtimeMs = 0; }
 }
 
-function snapshotFiles() {
+function snapshotFiles(store) {
   try {
-    return fs.readdirSync(SNAPSHOT_DIR)
+    return fs.readdirSync(store.snapDir)
       .filter((name) => /^snapshot-[\dTZ_-]+-(?:daily|before-import|before-restore|before-delete|external-edit)-[\w-]+\.json$/.test(name))
-      .map((name) => ({ name, full: path.join(SNAPSHOT_DIR, name), mtime: fs.statSync(path.join(SNAPSHOT_DIR, name)).mtimeMs }))
+      .map((name) => ({ name, full: path.join(store.snapDir, name), mtime: fs.statSync(path.join(store.snapDir, name)).mtimeMs }))
       .sort((a, b) => b.mtime - a.mtime);
   } catch (_) { return []; }
 }
-function hasSnapshotForDay(day) {
+function hasSnapshotForDay(store, day) {
   const prefix = `snapshot-${day}`;
-  return snapshotFiles().some((item) => item.name.startsWith(prefix));
+  return snapshotFiles(store).some((item) => item.name.startsWith(prefix));
 }
-function createSnapshot(reason) {
-  if (!fs.existsSync(DATA_FILE)) return null;
+function createSnapshot(store, reason) {
+  if (!fs.existsSync(store.dataFile)) return null;
   try {
-    fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
+    fs.mkdirSync(store.snapDir, { recursive: true });
     const now = new Date();
     const stamp = `${dayStr()}T${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
     const id = `snapshot-${stamp}-${reason}-${crypto.randomBytes(3).toString('hex')}`;
-    const full = path.join(SNAPSHOT_DIR, `${id}.json`);
-    fs.copyFileSync(DATA_FILE, full);
-    const assetDir = path.join(SNAPSHOT_DIR, id);
+    const full = path.join(store.snapDir, `${id}.json`);
+    fs.copyFileSync(store.dataFile, full);
+    const assetDir = path.join(store.snapDir, id);
     let saved;
-    try { saved = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); } catch (_) { saved = null; }
+    try { saved = JSON.parse(fs.readFileSync(store.dataFile, 'utf8')); } catch (_) { saved = null; }
     if (saved && (Array.isArray(saved.tasks) || Array.isArray(saved.mangas))) {
       fs.mkdirSync(assetDir, { recursive: true });
       const urls = allTasksOf(saved).flatMap((task) => (task.entries || []).flatMap((entry) => [
@@ -214,19 +255,19 @@ function createSnapshot(reason) {
       ]));
       for (const url of new Set(urls)) {
         if (!/^\/uploads\/[\w.-]+$/.test(url)) continue;
-        const source = path.join(UPLOAD_DIR, path.basename(url));
+        const source = path.join(store.uploadDir, path.basename(url));
         const destination = path.join(assetDir, path.basename(url));
         if (!fs.existsSync(source)) continue;
         try { fs.linkSync(source, destination); }
         catch (_) { try { fs.copyFileSync(source, destination); } catch (_) { /* 缺失或不可读附件不阻止记录快照 */ } }
       }
     }
-    for (const old of snapshotFiles().slice(SNAPSHOT_LIMIT)) {
+    for (const old of snapshotFiles(store).slice(SNAPSHOT_LIMIT)) {
       try {
         fs.unlinkSync(old.full);
         const oldId = old.name.slice(0, -5);
-        const oldAssets = path.join(SNAPSHOT_DIR, oldId);
-        if (oldAssets.startsWith(`${SNAPSHOT_DIR}${path.sep}`)) fs.rmSync(oldAssets, { recursive: true, force: true });
+        const oldAssets = path.join(store.snapDir, oldId);
+        if (oldAssets.startsWith(`${store.snapDir}${path.sep}`)) fs.rmSync(oldAssets, { recursive: true, force: true });
       } catch (_) { /* 忽略清理失败 */ }
     }
     return id;
@@ -235,8 +276,8 @@ function createSnapshot(reason) {
     return null;
   }
 }
-function listSnapshots() {
-  return snapshotFiles().map(({ name, full, mtime }) => {
+function listSnapshots(store) {
+  return snapshotFiles(store).map(({ name, full, mtime }) => {
     let tasks = 0;
     try { tasks = allTasksOf(JSON.parse(fs.readFileSync(full, 'utf8'))).length; } catch (_) { /* 显示损坏快照，恢复接口会给出错误 */ }
     const id = name.slice(0, -5);
@@ -245,7 +286,29 @@ function listSnapshots() {
   });
 }
 
-let data = loadData();
+const DEFAULT_STORE = {
+  name: '', root: ROOT,
+  dataFile: DATA_FILE, uploadDir: UPLOAD_DIR, snapDir: SNAPSHOT_DIR,
+  lastMtimeMs: 0, lastDailySnapDay: '', data: null,
+};
+const stores = new Map([['', DEFAULT_STORE]]);
+/* 多用户：按需装载某个账号的数据域（首次访问时读盘，缺文件就建一份空的） */
+function ensureStore(name) {
+  const cached = stores.get(name);
+  if (cached) return cached;
+  const root = path.join(USERS_DIR, name);
+  const store = {
+    name, root,
+    dataFile: path.join(root, 'data.json'),
+    uploadDir: path.join(root, 'uploads'),
+    snapDir: path.join(root, '.backups'),
+    lastMtimeMs: 0, lastDailySnapDay: '', data: null,
+  };
+  store.data = loadStoreData(store, () => newUserStoreData(store));
+  stores.set(name, store);
+  return store;
+}
+DEFAULT_STORE.data = loadStoreData(DEFAULT_STORE, seedData);
 
 /* ---------------- 单实例锁 ----------------
  * 数据全量驻留内存、saveData 整份覆盖写盘，两个实例并存必然互相覆盖丢数据。
@@ -278,19 +341,19 @@ acquireLock();
 
 /* ---------------- 工具 ---------------- */
 const S = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
-function mangaForRequest(req) {
-  const id = new URL(req.url, 'http://x').searchParams.get('mangaId') || data.activeMangaId;
-  return data.mangas.find((m) => m.id === id) || data.mangas.find((m) => m.id === data.activeMangaId) || data.mangas[0] || null;
+function mangaForRequest(store, req) {
+  const id = new URL(req.url, 'http://x').searchParams.get('mangaId') || store.data.activeMangaId;
+  return store.data.mangas.find((m) => m.id === id) || store.data.mangas.find((m) => m.id === store.data.activeMangaId) || store.data.mangas[0] || null;
 }
-const findTask = (id, req) => mangaForRequest(req)?.tasks.find((t) => t.id === id);
-function clientData(mangaId) {
-  const manga = data.mangas.find((m) => m.id === mangaId) || data.mangas[0];
+const findTask = (store, id, req) => mangaForRequest(store, req)?.tasks.find((t) => t.id === id);
+function clientData(store, mangaId) {
+  const manga = store.data.mangas.find((m) => m.id === mangaId) || store.data.mangas[0];
   return {
     version: 2,
-    seededAt: data.seededAt,
+    seededAt: store.data.seededAt,
     activeMangaId: manga?.id || '',
     activeMangaTitle: manga?.title || '',
-    mangas: data.mangas.map((m) => ({ id: m.id, title: m.title, createdAt: m.createdAt, taskCount: m.tasks.length })),
+    mangas: store.data.mangas.map((m) => ({ id: m.id, title: m.title, createdAt: m.createdAt, taskCount: m.tasks.length })),
     tasks: manga ? manga.tasks : [],
   };
 }
@@ -396,10 +459,10 @@ const cleanTasks = (input) => input.slice(0, 500).map((t) => {
   };
 }).filter(Boolean);
 
-function removeUploads(urls) {
+function removeUploads(store, urls) {
   for (const u of urls || []) {
     if (!/^\/uploads\/[\w.-]+$/.test(u)) continue;
-    try { fs.unlinkSync(path.join(UPLOAD_DIR, path.basename(u))); } catch (_) { /* 文件可能已不在 */ }
+    try { fs.unlinkSync(path.join(store.uploadDir, path.basename(u))); } catch (_) { /* 文件可能已不在 */ }
   }
 }
 /* 旧 URL 列表中已被新列表抛弃的那些（差集），用于安全删除附件 */
@@ -480,6 +543,32 @@ function isAuthed(req) {
   return getCookie(req, 'auth') === AUTH_TOKEN;
 }
 
+/* ---------------- 多用户会话 ----------------
+ * token = v1.<用户名>.<到期时间>.<HMAC 签名>：用进程随机密钥签名，
+ * 重启即全部会话失效（与单用户模式的随机盐同思路），Cookie 里不出现口令明文。 */
+const AUTH_SECRET = crypto.randomBytes(32).toString('hex');
+function signToken(name) {
+  const exp = Math.floor(Date.now() / 1000) + 30 * 86400;
+  const body = `v1.${name}.${exp}`;
+  return `${body}.${crypto.createHmac('sha256', AUTH_SECRET).update(body).digest('hex')}`;
+}
+function verifyToken(tok) {
+  const parts = String(tok || '').split('.');
+  if (parts.length !== 4 || parts[0] !== 'v1') return null;
+  const [, name, exp, sig] = parts;
+  if (!/^[a-z0-9_-]{1,32}$/.test(name)) return null;
+  const want = crypto.createHmac('sha256', AUTH_SECRET).update(`v1.${name}.${exp}`).digest('hex');
+  if (!safeEqual(sig, want)) return null;
+  if (!(Number(exp) > Math.floor(Date.now() / 1000))) return null;
+  return USERS.some((u) => u.name === name) ? name : null;
+}
+function sessionUser(req) {
+  return MULTI ? verifyToken(getCookie(req, 'auth')) : null;
+}
+function authCookie(value, maxAge) {
+  return `auth=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${SECURE_COOKIE ? '; Secure' : ''}`;
+}
+
 /* 内网免口令：直连的内网/本机来源直接放行；经隧道来的公网请求必须口令。
  * 判定统一走 clientIp()：同机隧道场景 socket 恒为回环，须靠可信对端注入的转发头还原真实访客 IP；
  * 公网直连时 socket 地址本身就是真实来源，转发头不参与判定（见 clientIp 注释）。 */
@@ -511,16 +600,20 @@ function failRecord(ip) {
   }
   return rec;
 }
-function serveLogin(res) {
+function serveLogin(res, multi) {
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+  const userField = multi
+    ? `<input id="user" type="text" autocomplete="username" autocapitalize="off" placeholder="用户名…" style="flex:1;font-size:16px;padding:9px 12px;border:2px solid #161513;background:#fbf8f0;border-radius:14px 5px 16px 6px/6px 16px 5px 14px;outline:none;font-family:inherit;margin-bottom:10px;">`
+    : '';
+  const subtitle = multi ? 'SERVER MANGA LOG · 登录后只看到自己的记录' : 'SERVER MANGA LOG · 口令确认后开演';
   res.end(`<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>验明正身 · 漫画志</title></head>
 <body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#efe9da;background-image:radial-gradient(circle,rgba(22,21,19,.08) 1px,transparent 1.4px);background-size:7px 7px;font-family:KaiTi,'楷体',STKaiti,serif;color:#161513;">
 <div style="background:#f6f2e8;border:2.5px solid #161513;border-radius:255px 15px 225px 15px/15px 225px 15px 255px;box-shadow:8px 8px 0 rgba(22,21,19,.85);padding:38px 44px;max-width:420px;transform:rotate(-.6deg);text-align:center;">
 <div style="font-family:KaiTi,serif;font-size:34px;letter-spacing:6px;">验明正身</div>
-<div style="font-size:13px;color:rgba(22,21,19,.55);letter-spacing:3px;margin:4px 0 20px;">SERVER MANGA LOG · 口令确认后开演</div>
-<form id="f" style="display:flex;gap:10px;">
-<input id="code" type="password" autofocus placeholder="输入口令…" style="flex:1;font-size:16px;padding:9px 12px;border:2px solid #161513;background:#fbf8f0;border-radius:14px 5px 16px 6px/6px 16px 5px 14px;outline:none;font-family:inherit;">
+<div style="font-size:13px;color:rgba(22,21,19,.55);letter-spacing:3px;margin:4px 0 20px;">${subtitle}</div>
+<form id="f" style="display:flex;flex-wrap:wrap;gap:10px;">
+${userField}<input id="code" type="password" autofocus placeholder="输入口令…" style="flex:1;font-size:16px;padding:9px 12px;border:2px solid #161513;background:#fbf8f0;border-radius:14px 5px 16px 6px/6px 16px 5px 14px;outline:none;font-family:inherit;">
 <button style="border:2px solid #161513;background:#161513;color:#f6f2e8;font-weight:700;font-size:15px;letter-spacing:2px;padding:8px 16px;border-radius:14px 5px 16px 6px/6px 16px 5px 14px;box-shadow:3px 3px 0 rgba(22,21,19,.4);cursor:pointer;font-family:inherit;">开演</button>
 </form>
 <div id="msg" style="margin-top:14px;font-size:13.5px;min-height:20px;color:#161513;"></div>
@@ -529,8 +622,11 @@ function serveLogin(res) {
 document.getElementById('f').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const msg = document.getElementById('msg');
+  const userEl = document.getElementById('user');
+  const payload = { code: document.getElementById('code').value };
+  if (userEl) payload.name = userEl.value;
   try {
-    const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'manga-log' }, body: JSON.stringify({ code: document.getElementById('code').value }) });
+    const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'manga-log' }, body: JSON.stringify(payload) });
     const b = await r.json().catch(() => ({}));
     if (r.ok) { location.href = '/'; return; }
     msg.textContent = b.error || '口令不对';
@@ -540,43 +636,50 @@ document.getElementById('f').addEventListener('submit', async (ev) => {
 </body></html>`);
 }
 
-/* ---------------- API ---------------- */
+/* ---------------- API ----------------
+ * 每个处理函数第 5 个参数 C 是当前请求所属的数据域（store）：
+ * 单用户模式为 DEFAULT_STORE，多用户模式为该账号的 users/<name>/。 */
 const routes = [
-  ['GET', /^\/api\/data$/, (req, res) => {
-    const query = new URL(req.url, 'http://x').searchParams;
-    return json(res, 200, query.get('all') === '1' ? data : clientData(mangaForRequest(req)?.id));
+  ['GET', /^\/api\/whoami$/, (req, res, m, body, C) => json(res, 200, { multi: MULTI, user: MULTI ? C.name : null })],
+  ['POST', /^\/api\/logout$/, (req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Set-Cookie': authCookie('', 0) });
+    return res.end('{"ok":true}');
   }],
-  ['POST', /^\/api\/mangas$/, (req, res, m, body) => {
+  ['GET', /^\/api\/data$/, (req, res, m, body, C) => {
+    const query = new URL(req.url, 'http://x').searchParams;
+    return json(res, 200, query.get('all') === '1' ? C.data : clientData(C, mangaForRequest(C, req)?.id));
+  }],
+  ['POST', /^\/api\/mangas$/, (req, res, m, body, C) => {
     const title = S(body.title, 80);
     if (!title) return json(res, 400, { error: '漫画名不能为空' });
     const manga = { id: uid('m'), title, createdAt: new Date().toISOString(), tasks: [] };
-    data.mangas.unshift(manga);
-    data.activeMangaId = manga.id;
-    saveData(data);
-    return json(res, 200, { ok: true, manga, data: clientData(manga.id) });
+    C.data.mangas.unshift(manga);
+    C.data.activeMangaId = manga.id;
+    saveData(C, C.data);
+    return json(res, 200, { ok: true, manga, data: clientData(C, manga.id) });
   }],
-  ['PATCH', /^\/api\/mangas\/([A-Za-z0-9_-]+)$/, (req, res, m, body) => {
-    const manga = data.mangas.find((item) => item.id === m[1]);
+  ['PATCH', /^\/api\/mangas\/([A-Za-z0-9_-]+)$/, (req, res, m, body, C) => {
+    const manga = C.data.mangas.find((item) => item.id === m[1]);
     if (!manga) return json(res, 404, { error: '找不到这部漫画' });
     const title = S(body.title, 80);
     if (!title) return json(res, 400, { error: '漫画名不能为空' });
     manga.title = title;
-    saveData(data);
-    return json(res, 200, { ok: true, manga, data: clientData(manga.id) });
+    saveData(C, C.data);
+    return json(res, 200, { ok: true, manga, data: clientData(C, manga.id) });
   }],
-  ['GET', /^\/api\/snapshots$/, (req, res) => json(res, 200, { snapshots: listSnapshots() })],
-  ['POST', /^\/api\/snapshots\/restore$/, (req, res, m, body) => {
+  ['GET', /^\/api\/snapshots$/, (req, res, m, body, C) => json(res, 200, { snapshots: listSnapshots(C) })],
+  ['POST', /^\/api\/snapshots\/restore$/, (req, res, m, body, C) => {
     const id = typeof body.id === 'string' && /^snapshot-[\dTZ_-]+-(?:daily|before-import|before-restore|before-delete|external-edit)-[\w-]+$/.test(body.id) ? body.id : '';
     if (!id) return json(res, 400, { error: '快照编号无效' });
-    const full = path.join(SNAPSHOT_DIR, `${id}.json`);
-    if (!full.startsWith(`${SNAPSHOT_DIR}${path.sep}`) || !fs.existsSync(full)) return json(res, 404, { error: '找不到这份快照' });
+    const full = path.join(C.snapDir, `${id}.json`);
+    if (!full.startsWith(`${C.snapDir}${path.sep}`) || !fs.existsSync(full)) return json(res, 404, { error: '找不到这份快照' });
     let restored;
     try { restored = JSON.parse(fs.readFileSync(full, 'utf8')); } catch (_) { return json(res, 400, { error: '快照文件损坏，无法恢复' }); }
     try { restored = normalizeStoredData(restored); }
     catch (_) { return json(res, 400, { error: '快照内容不完整，无法恢复' }); }
     /* 快照里的 tasks 也过一遍与导入一致的清洗，维持「入库必经清洗」的纵深防御 */
     for (const manga of restored.mangas) manga.tasks = cleanTasks(manga.tasks);
-    const assetDir = path.join(SNAPSHOT_DIR, id);
+    const assetDir = path.join(C.snapDir, id);
     const requiredAssets = allTasksOf(restored).flatMap((task) => (task.entries || []).flatMap((entry) => [
       ...(entry.images || []).map((item) => item.url), ...(entry.files || []).map((item) => item.url),
     ]));
@@ -585,7 +688,7 @@ const routes = [
       if (!/^\/uploads\/[\w.-]+$/.test(url)) continue;
       const name = path.basename(url);
       const source = path.join(assetDir, name);
-      const destination = path.join(UPLOAD_DIR, name);
+      const destination = path.join(C.uploadDir, name);
       if (!fs.existsSync(source)) { if (!fs.existsSync(destination)) missingAssets++; continue; }
       if (fs.existsSync(destination)) {
         try {
@@ -593,16 +696,16 @@ const routes = [
           if (srcStat.dev === dstStat.dev && srcStat.ino === dstStat.ino) continue;
         } catch (_) { /* 继续尝试复制快照附件 */ }
       }
-      try { fs.mkdirSync(UPLOAD_DIR, { recursive: true }); fs.copyFileSync(source, destination); }
+      try { fs.mkdirSync(C.uploadDir, { recursive: true }); fs.copyFileSync(source, destination); }
       catch (_) { missingAssets++; }
     }
-    createSnapshot('before-restore');
-    data = restored;
-    saveData(data);
-    return json(res, 200, { ok: true, mangas: data.mangas.length, tasks: allTasksOf(data).length, missingAssets });
+    createSnapshot(C, 'before-restore');
+    C.data = restored;
+    saveData(C, C.data);
+    return json(res, 200, { ok: true, mangas: C.data.mangas.length, tasks: allTasksOf(C.data).length, missingAssets });
   }],
 
-  ['POST', /^\/api\/tasks$/, (req, res, m, body) => {
+  ['POST', /^\/api\/tasks$/, (req, res, m, body, C) => {
     const title = S(body.title, 120);
     if (!title) return json(res, 400, { error: '话数标题不能为空' });
     const now = stampLocal(0, `${pad(new Date().getHours())}:${pad(new Date().getMinutes())}`);
@@ -615,13 +718,13 @@ const routes = [
       todos: normalizeTodos(body.todos),
       createdAt: now, updatedAt: now, entries: [],
     };
-    mangaForRequest(req).tasks.unshift(task);
-    saveData(data);
+    mangaForRequest(C, req).tasks.unshift(task);
+    saveData(C, C.data);
     return json(res, 200, { ok: true, task });
   }],
 
-  ['PATCH', /^\/api\/tasks\/([A-Za-z0-9_-]+)$/, (req, res, m, body) => {
-    const task = findTask(m[1], req);
+  ['PATCH', /^\/api\/tasks\/([A-Za-z0-9_-]+)$/, (req, res, m, body, C) => {
+    const task = findTask(C, m[1], req);
     if (!task) return json(res, 404, { error: '没有这一话' });
     if (body.title !== undefined) {
       const title = S(body.title, 120);
@@ -634,25 +737,25 @@ const routes = [
     if (body.note !== undefined) task.note = S(body.note, 1000);
     if (body.todos !== undefined) task.todos = normalizeTodos(body.todos);
     task.updatedAt = stampLocal(0, `${pad(new Date().getHours())}:${pad(new Date().getMinutes())}`);
-    saveData(data);
+    saveData(C, C.data);
     return json(res, 200, { ok: true, task });
   }],
 
-  ['DELETE', /^\/api\/tasks\/([A-Za-z0-9_-]+)$/, (req, res, m) => {
-    const task = findTask(m[1], req);
+  ['DELETE', /^\/api\/tasks\/([A-Za-z0-9_-]+)$/, (req, res, m, body, C) => {
+    const task = findTask(C, m[1], req);
     if (!task) return json(res, 404, { error: '没有这一话' });
-    createSnapshot('before-delete');
-    const manga = mangaForRequest(req);
+    createSnapshot(C, 'before-delete');
+    const manga = mangaForRequest(C, req);
     manga.tasks = manga.tasks.filter((t) => t.id !== m[1]);
     (task.entries || []).forEach((e) => {
-      removeUploads((e.images || []).map((x) => x.url));
-      removeUploads((e.files || []).map((x) => x.url));
+      removeUploads(C, (e.images || []).map((x) => x.url));
+      removeUploads(C, (e.files || []).map((x) => x.url));
     });
-    saveData(data);
+    saveData(C, C.data);
     return json(res, 200, { ok: true });
   }],
 
-  ['POST', /^\/api\/upload$/, (req, res, m, body) => {
+  ['POST', /^\/api\/upload$/, (req, res, m, body, C) => {
     const m2 = typeof body.dataUrl === 'string'
       ? body.dataUrl.match(/^data:(image\/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/=\s]+)$/)
       : null;
@@ -662,27 +765,27 @@ const routes = [
     if (buf.length > 8 * 1024 * 1024) return json(res, 400, { error: '图片需在 8MB 以内' });
     const fname = `${uid('u')}.${IMG_TYPES[m2[1]]}`;
     try {
-      fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-      fs.writeFileSync(path.join(UPLOAD_DIR, fname), buf);
+      fs.mkdirSync(C.uploadDir, { recursive: true });
+      fs.writeFileSync(path.join(C.uploadDir, fname), buf);
     } catch (_) {
       return json(res, 500, { error: '图片保存失败' });
     }
     return json(res, 200, { ok: true, url: `/uploads/${fname}`, name: S(body.name, 120) || '图片' });
   }],
 
-  ['POST', /^\/api\/tasks\/([A-Za-z0-9_-]+)\/entries$/, (req, res, m, body) => {
-    const task = findTask(m[1], req);
+  ['POST', /^\/api\/tasks\/([A-Za-z0-9_-]+)\/entries$/, (req, res, m, body, C) => {
+    const task = findTask(C, m[1], req);
     if (!task) return json(res, 404, { error: '没有这一话' });
     const ne = normalizeEntry(body);
     if (ne.error) return json(res, 400, { error: ne.error });
     task.entries.push(ne.value);
     task.updatedAt = ne.value.time;
-    saveData(data);
+    saveData(C, C.data);
     return json(res, 200, { ok: true, task });
   }],
 
-  ['PATCH', /^\/api\/tasks\/([A-Za-z0-9_-]+)\/entries\/([A-Za-z0-9_-]+)$/, (req, res, m, body) => {
-    const task = findTask(m[1], req);
+  ['PATCH', /^\/api\/tasks\/([A-Za-z0-9_-]+)\/entries\/([A-Za-z0-9_-]+)$/, (req, res, m, body, C) => {
+    const task = findTask(C, m[1], req);
     if (!task) return json(res, 404, { error: '没有这一话' });
     const entry = task.entries.find((e) => e.id === m[2]);
     if (!entry) return json(res, 404, { error: '没有这一格' });
@@ -703,23 +806,23 @@ const routes = [
       const old = (entry.images || []).map((x) => x.url);
       entry.images = normalizeImages(body.images);
       const removed = orphansOf(old, entry.images);
-      if (removed.length) { createSnapshot('before-delete'); assetSnapshotMade = true; }
-      removeUploads(removed);
+      if (removed.length) { createSnapshot(C, 'before-delete'); assetSnapshotMade = true; }
+      removeUploads(C, removed);
     }
     if (body.tables !== undefined) entry.tables = normalizeTables(body.tables);
     if (body.files !== undefined) {
       const old = (entry.files || []).map((x) => x.url);
       entry.files = normalizeFiles(body.files);
       const removed = orphansOf(old, entry.files);
-      if (removed.length && !assetSnapshotMade) createSnapshot('before-delete');
-      removeUploads(removed);
+      if (removed.length && !assetSnapshotMade) createSnapshot(C, 'before-delete');
+      removeUploads(C, removed);
     }
     task.updatedAt = stampLocal(0, `${pad(new Date().getHours())}:${pad(new Date().getMinutes())}`);
-    saveData(data);
+    saveData(C, C.data);
     return json(res, 200, { ok: true, task });
   }],
 
-  ['POST', /^\/api\/import$/, (req, res, m, body) => {
+  ['POST', /^\/api\/import$/, (req, res, m, body, C) => {
     let importedMangas = null;
     let importedTasks = null;
     if (Array.isArray(body.mangas)) {
@@ -736,32 +839,32 @@ const routes = [
       return json(res, 400, { error: '缺少 mangas 或 tasks 数组' });
     }
 
-    createSnapshot('before-import');
+    createSnapshot(C, 'before-import');
     if (importedMangas) {
       const requestedActive = S(body.activeMangaId, 100);
-      data = {
+      C.data = {
         version: 2,
-        seededAt: data.seededAt,
+        seededAt: C.data.seededAt,
         activeMangaId: importedMangas.some((manga) => manga.id === requestedActive) ? requestedActive : importedMangas[0].id,
         mangas: importedMangas,
       };
     } else {
-      mangaForRequest(req).tasks = importedTasks;
+      mangaForRequest(C, req).tasks = importedTasks;
     }
-    saveData(data);
-    return json(res, 200, { ok: true, mangas: data.mangas.length, tasks: allTasksOf(data).length });
+    saveData(C, C.data);
+    return json(res, 200, { ok: true, mangas: C.data.mangas.length, tasks: allTasksOf(C.data).length });
   }],
 
-  ['DELETE', /^\/api\/tasks\/([A-Za-z0-9_-]+)\/entries\/([A-Za-z0-9_-]+)$/, (req, res, m) => {
-    const task = findTask(m[1], req);
+  ['DELETE', /^\/api\/tasks\/([A-Za-z0-9_-]+)\/entries\/([A-Za-z0-9_-]+)$/, (req, res, m, body, C) => {
+    const task = findTask(C, m[1], req);
     if (!task) return json(res, 404, { error: '没有这一话' });
     const removed = task.entries.find((e) => e.id === m[2]);
     if (!removed) return json(res, 404, { error: '没有这一格' });
-    createSnapshot('before-delete');
+    createSnapshot(C, 'before-delete');
     task.entries = task.entries.filter((e) => e.id !== m[2]);
-    removeUploads((removed.images || []).map((x) => x.url));
-    removeUploads((removed.files || []).map((x) => x.url));
-    saveData(data);
+    removeUploads(C, (removed.images || []).map((x) => x.url));
+    removeUploads(C, (removed.files || []).map((x) => x.url));
+    saveData(C, C.data);
     return json(res, 200, { ok: true, task });
   }],
 ];
@@ -813,7 +916,7 @@ function extOf(name) {
   return m ? m[1].toLowerCase() : '';
 }
 
-async function handleDocUpload(req, res, query) {
+async function handleDocUpload(req, res, query, store) {
   let name;
   try { name = decodeURIComponent(query.get('name') || ''); } catch (_) { name = ''; }
   name = S(name, 200) || '附件';
@@ -825,8 +928,8 @@ async function handleDocUpload(req, res, query) {
   if (!buf.length) return json(res, 400, { error: '文档内容为空' });
   const fname = `${uid('u')}.${ext}`;
   try {
-    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-    fs.writeFileSync(path.join(UPLOAD_DIR, fname), buf);
+    fs.mkdirSync(store.uploadDir, { recursive: true });
+    fs.writeFileSync(path.join(store.uploadDir, fname), buf);
   } catch (_) {
     return json(res, 500, { error: '文档保存失败' });
   }
@@ -851,11 +954,11 @@ const MIME = {
   '.txt': 'text/plain; charset=utf-8',
 };
 
-function serveStatic(req, res, pathname) {
+function serveStatic(req, res, pathname, uploadBase) {
   let base = PUBLIC_DIR;
   let rel = pathname === '/' ? 'index.html' : pathname.slice(1);
   let isUpload = false;
-  if (pathname.startsWith('/uploads/')) { base = UPLOAD_DIR; rel = path.basename(pathname); isUpload = true; }
+  if (pathname.startsWith('/uploads/')) { base = uploadBase || UPLOAD_DIR; rel = path.basename(pathname); isUpload = true; }
   const filePath = path.normalize(path.join(base, rel));
   const within = path.relative(base, filePath);
   if (!within || within === '..' || within.startsWith(`..${path.sep}`) || path.isAbsolute(within)) return notFound(res);
@@ -894,8 +997,40 @@ async function handler(req, res) {
   try { pathname = decodeURIComponent(u.pathname); }
   catch (_) { return json(res, 400, { error: '请求路径编码非法' }); }
   try {
-    /* 口令锁：设置了 ACCESS_CODE 时，公网来源要求登录；内网直连免口令 */
-    if (ACCESS_CODE && !isLanRequest(req)) {
+    let store = DEFAULT_STORE;
+    /* ---- 多用户模式：必须登录，身份决定数据域 ---- */
+    if (MULTI) {
+      const methodM = req.method.toUpperCase();
+      const user = sessionUser(req);
+      if (pathname === '/api/login' && methodM === 'POST') {
+        let body = {};
+        try { body = await readBody(req, 4096); } catch (_) { body = {}; }
+        const name = String(body.name || '').trim().toLowerCase();
+        const bucket = `${clientIp(req)}|${name}`;
+        if (failRecord(bucket).n >= 20) return json(res, 429, { error: '错太多次了，休息 5 分钟再来' });
+        const account = USERS.find((u) => u.name === name);
+        if (account && safeEqual(String(body.code || '').trim(), account.code)) {
+          loginFails.delete(bucket);
+          res.writeHead(200, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Set-Cookie': authCookie(signToken(name), 30 * 86400),
+          });
+          return res.end('{"ok":true}');
+        }
+        failRecord(bucket).n += 1;
+        return json(res, 401, { error: '用户名或口令不对' });
+      }
+      if (!user) {
+        if (pathname.startsWith('/api/') && pathname !== '/api/logout') return json(res, 401, { error: '未登录或会话已失效' });
+        if (pathname.startsWith('/uploads/')) return json(res, 401, { error: '未登录或会话已失效' });
+        if (pathname === '/login') return serveLogin(res, true);
+        res.writeHead(302, { Location: '/login' });
+        return res.end();
+      }
+      if (pathname === '/login') { res.writeHead(302, { Location: '/' }); return res.end(); }
+      store = ensureStore(user);
+    } else if (ACCESS_CODE && !isLanRequest(req)) {
+      /* ---- 单用户模式：口令锁（公网来源要求登录；内网直连免口令） ---- */
       const ip = clientIp(req);
       if (pathname === '/api/login' && req.method.toUpperCase() === 'POST') {
         let body = {};
@@ -905,7 +1040,7 @@ async function handler(req, res) {
           loginFails.delete(ip);
           res.writeHead(200, {
             'Content-Type': 'application/json; charset=utf-8',
-            'Set-Cookie': `auth=${AUTH_TOKEN}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${30 * 86400}${SECURE_COOKIE ? '; Secure' : ''}`,
+            'Set-Cookie': authCookie(AUTH_TOKEN, 30 * 86400),
           });
           return res.end('{"ok":true}');
         }
@@ -913,22 +1048,19 @@ async function handler(req, res) {
         return json(res, 401, { error: '口令不对' });
       }
       if (pathname === '/api/logout') {
-        res.writeHead(200, {
-          'Content-Type': 'application/json; charset=utf-8',
-          'Set-Cookie': 'auth=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0',
-        });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Set-Cookie': authCookie('', 0) });
         return res.end('{"ok":true}');
       }
       if (!isAuthed(req)) {
-        if (pathname === '/login') return serveLogin(res);
+        if (pathname === '/login') return serveLogin(res, false);
         if (pathname.startsWith('/api/')) return json(res, 401, { error: '未登录或会话已失效' });
         res.writeHead(302, { Location: '/login' });
         return res.end();
       }
       if (pathname === '/login') { res.writeHead(302, { Location: '/' }); return res.end(); }
     }
-    /* 内网免口令用户访问 /login：不需要登录页，直接回主页 */
-    if (ACCESS_CODE && pathname === '/login') { res.writeHead(302, { Location: '/' }); return res.end(); }
+    /* 单用户口令锁模式下，内网免口令用户访问 /login 直接回主页 */
+    if (!MULTI && ACCESS_CODE && pathname === '/login') { res.writeHead(302, { Location: '/' }); return res.end(); }
     if (pathname.startsWith('/api/')) {
       const method = req.method.toUpperCase();
       /* ---- CSRF 防护 ----
@@ -953,7 +1085,7 @@ async function handler(req, res) {
       }
       /* 文档上传：原始二进制 + ?name= 文件名（经上方 CSRF 校验后分发，读原始体而非 JSON） */
       if (pathname === '/api/upload/doc' && method === 'POST') {
-        return await handleDocUpload(req, res, u.searchParams);
+        return await handleDocUpload(req, res, u.searchParams, store);
       }
       for (const [m, re, fn] of routes) {
         if (m !== method) continue;
@@ -966,12 +1098,12 @@ async function handler(req, res) {
           try { body = await readBody(req, limit); }
           catch (e) { return json(res, e.message === 'bad json' ? 400 : 413, { error: e.message === 'bad json' ? '请求体不是合法 JSON' : '请求体过大' }); }
         }
-        return fn(req, res, match, body);
+        return fn(req, res, match, body, store);
       }
       return json(res, 404, { error: '接口不存在' });
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') return notFound(res);
-    return serveStatic(req, res, pathname);
+    return serveStatic(req, res, pathname, store.uploadDir);
   } catch (e) {
     console.error('[x] 处理请求出错：', e);
     return json(res, 500, { error: '服务器内部错误' });
@@ -1008,12 +1140,15 @@ function listen(port, triesLeft) {
   server.listen(port, BIND_HOST, () => {
     const showHost = BIND_HOST === '0.0.0.0' || BIND_HOST === '::' ? `http://<本机IP>:${port}` : `http://${BIND_HOST}:${port}`;
     const line = '─'.repeat(46);
+    const modeLabel = MULTI ? '多用户' : '口令锁';
+    const modeText = MULTI ? `${USERS.length} 人` : (ACCESS_CODE ? '已启用' : '未启用');
+    const dataText = MULTI ? './users/<用户>/data.json' : './data.json';
     console.log('');
     console.log(`  ┌${line}┐`);
     console.log('  │  服务器改动 · 漫画志   —— 开演！           │');
     console.log(`  │  ${showHost.padEnd(41)}│`);
-    console.log(`  │  监听 ${String(BIND_HOST).padEnd(14)}  口令锁 ${String(ACCESS_CODE ? '已启用' : '未启用').padEnd(4)}      │`);
-    console.log('  │  数据文件：./data.json                     │');
+    console.log(`  │  监听 ${String(BIND_HOST).padEnd(14)}  ${modeLabel} ${String(modeText).padEnd(6)}     │`);
+    console.log(`  │  数据文件：${dataText}${' '.repeat(Math.max(1, 31 - dataText.length))}│`);
     console.log('  │  按 Ctrl+C 闭幕                            │');
     console.log(`  └${line}┘`);
     if (BIND_HOST === '127.0.0.1') openBrowser(`http://127.0.0.1:${port}`);

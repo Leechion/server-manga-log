@@ -3,5 +3,6 @@
   "host": "127.0.0.1",
   "port": 4780,
   "trustProxy": false,
-  "secureCookie": false
+  "secureCookie": false,
+  "users": []
 }

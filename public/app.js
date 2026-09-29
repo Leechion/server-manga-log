@@ -120,6 +120,11 @@ async function api(path, opts = {}) {
     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'manga-log' },
     ...opts,
   });
+  if (res.status === 401) {
+    /* 会话失效（多用户模式重启后必然发生）：回登录页重新认人 */
+    location.href = '/login';
+    throw new Error('未登录或会话已失效');
+  }
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error || `请求失败 (${res.status})`);
   return body;
@@ -2021,6 +2026,17 @@ document.addEventListener('keydown', (ev) => {
 });
 
 /* ---------------- 启动 ---------------- */
+/* 多用户模式：显示当前登录的用户名；单用户模式隐藏「退场」按钮 */
+api('/api/whoami').then((w) => {
+  const chip = $('#whoamiChip');
+  if (w.multi) {
+    if (chip) { chip.textContent = `👤 ${w.user}`; chip.classList.remove('hidden'); }
+  } else {
+    const logout = $('#btnLogout');
+    if (logout) logout.classList.add('hidden');
+  }
+}).catch(() => { /* 拿不到就按单用户呈现，不影响主流程 */ });
+
 refresh().catch((e) => {
   $('#stage').innerHTML = `<div class="empty-hero"><div class="big">加载失败…</div><p>${esc(e.message)}</p></div>`;
 });

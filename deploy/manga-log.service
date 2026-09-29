@@ -27,6 +27,8 @@ Environment=ACCESS_CODE=change-me-please
 #Environment=TRUST_PROXY=1
 # 外层是 HTTPS 隧道/反代时打开：会话 Cookie 加 Secure
 #Environment=SECURE_COOKIE=1
+# 多人共用：在 config.json 里写 "users": [{"name":"alice","code":"口令"}] 即进入多用户模式，
+# 每人登录自己的账号、只看自己的记录（数据隔离在 users/<用户名>/，多用户模式忽略 ACCESS_CODE）。
 Restart=always
 RestartSec=3
 

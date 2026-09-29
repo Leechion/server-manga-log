@@ -4,6 +4,7 @@ data.json.*
 data.json.conflict-*
 .backups/
 uploads/
+users/
 config.json
 manga_code.txt
 import_history.py

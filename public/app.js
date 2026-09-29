@@ -2026,16 +2026,15 @@ document.addEventListener('keydown', (ev) => {
 });
 
 /* ---------------- 启动 ---------------- */
-/* 多用户模式：显示当前登录的用户名；单用户模式隐藏「退场」按钮 */
+/* 「退场」按钮与用户名默认隐藏（单用户模式本就不需要，避免首屏闪一下），
+ * 只有 whoami 表明是多用户模式时才显示。 */
 api('/api/whoami').then((w) => {
+  if (!w.multi) return;
   const chip = $('#whoamiChip');
-  if (w.multi) {
-    if (chip) { chip.textContent = `👤 ${w.user}`; chip.classList.remove('hidden'); }
-  } else {
-    const logout = $('#btnLogout');
-    if (logout) logout.classList.add('hidden');
-  }
-}).catch(() => { /* 拿不到就按单用户呈现，不影响主流程 */ });
+  const logout = $('#btnLogout');
+  if (chip) { chip.textContent = `👤 ${w.user}`; chip.classList.remove('hidden'); }
+  if (logout) logout.classList.remove('hidden');
+}).catch(() => { /* 拿不到就保持隐藏，不影响主流程 */ });
 
 refresh().catch((e) => {
   $('#stage').innerHTML = `<div class="empty-hero"><div class="big">加载失败…</div><p>${esc(e.message)}</p></div>`;

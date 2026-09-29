@@ -193,6 +193,11 @@ sudo systemctl daemon-reload && sudo systemctl enable --now manga-log
 - 公网：没有域名/公网 IP 也能走 Cloudflare 快速隧道（`cloudflared tunnel --url http://127.0.0.1:4780`）；
   有域名推荐命名隧道固定地址；有 VPS 可用 frp
 - **公网部署务必设置 `ACCESS_CODE`**：内网直连免口令，公网来源强制登录，错误口令限次重试
+- **转发头信任规则**：`CF-Connecting-IP` / `X-Forwarded-For` 只在立即 TCP 对端可信时（同机 cloudflared、
+  本机 nginx/frpc 连回环）才被采信；公网直连时这类头可伪造，一律忽略、按真实 socket 判定。
+  反向代理部署在**另一台机器**时须显式 `"trustProxy": true`（或 `TRUST_PROXY=1`），并用防火墙限制端口只允许代理机直连
+- 外层是 HTTPS 隧道/反代时建议 `"secureCookie": true`（或 `SECURE_COOKIE=1`），会话 Cookie 加 `Secure`
+- `config.json` 语法错误会**拒绝启动**而不是静默回退默认值，防止 accessCode 被无声禁用
 
 详细步骤见 [README 部署章节](#部署到服务器--外网访问) 与 `deploy/` 目录。
 

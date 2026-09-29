@@ -21,6 +21,12 @@ Environment=HOST=0.0.0.0
 Environment=PORT=4780
 # ★★ 必改：外网访问一定要设口令，否则谁都能改你的记录！
 Environment=ACCESS_CODE=change-me-please
+# 同机隧道/反代（cloudflared、frpc、本机 nginx）无需额外配置：
+# 转发头只在 TCP 对端为回环/内网时才被采信，公网直连伪造 XFF 无效。
+# 反向代理部署在另一台机器时才需要下一行，并同时用防火墙限制 4780 只允许代理机直连：
+#Environment=TRUST_PROXY=1
+# 外层是 HTTPS 隧道/反代时打开：会话 Cookie 加 Secure
+#Environment=SECURE_COOKIE=1
 Restart=always
 RestartSec=3
 

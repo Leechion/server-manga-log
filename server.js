@@ -17,15 +17,34 @@ const UPLOAD_DIR = path.join(ROOT, 'uploads');
 const SNAPSHOT_DIR = path.join(ROOT, '.backups');
 const SNAPSHOT_LIMIT = 40;
 
-/* 可选 config.json：{ "accessCode": "口令", "host": "0.0.0.0", "port": 4780 }（环境变量优先） */
+/* 可选 config.json：
+ * { "accessCode": "口令", "host": "127.0.0.1", "port": 4780,
+ *   "trustProxy": false, "secureCookie": false }（环境变量 ACCESS_CODE/HOST/PORT/TRUST_PROXY/SECURE_COOKIE 优先） */
 function loadConfig() {
-  try { return JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8')); }
-  catch (_) { return {}; }
+  let raw = '';
+  try { raw = fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8'); }
+  catch (e) {
+    if (e.code !== 'ENOENT') console.warn('[!] config.json 读取失败，按默认配置启动：', e.message);
+    return {};
+  }
+  if (!raw.trim()) return {};
+  try { return JSON.parse(raw); }
+  catch (_) {
+    console.error('[x] config.json 不是合法 JSON（注释、尾逗号都会导致解析失败）。');
+    console.error('    为防 accessCode 被静默禁用导致公网裸奔，服务拒绝启动。请修正语法后重试。');
+    process.exit(1);
+  }
 }
 const CFG = loadConfig();
 const ACCESS_CODE = String(process.env.ACCESS_CODE ?? CFG.accessCode ?? '').trim();
 const BIND_HOST = process.env.HOST || CFG.host || '127.0.0.1';
 const BASE_PORT = Number(process.env.PORT) || Number(CFG.port) || 4780;
+const flagOf = (envVal, cfgVal) => (envVal != null ? /^(1|true|yes)$/i.test(String(envVal)) : cfgVal === true);
+/* 反代头信任开关：默认关。只有立即 TCP 对端本身可信（同机隧道/反代）时才采信转发头；
+ * 反代部署在另一台机器时显式开启，并同时用防火墙收口。 */
+const TRUST_PROXY = flagOf(process.env.TRUST_PROXY, CFG.trustProxy);
+/* 会话 Cookie 加 Secure：外层是 HTTPS 隧道/反代时开启，防口令会话被降级窃听 */
+const SECURE_COOKIE = flagOf(process.env.SECURE_COOKIE, CFG.secureCookie);
 
 const KINDS = ['配置', '代码', '部署', '修复', '排查', '回滚', '其他'];
 const RESULTS = ['成功', '失败', '待验证'];
@@ -41,8 +60,9 @@ function dayStr(offsetDays) {
 function stampLocal(offsetDays = 0, hhmm = '00:00') {
   return `${dayStr(offsetDays)} ${hhmm}`;
 }
+/* 随机段用 crypto 而非 Math.random：附件名会被公网枚举，时间戳便于排序 */
 function uid(prefix) {
-  return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+  return `${prefix}_${Date.now().toString(36)}${crypto.randomBytes(4).toString('hex')}`;
 }
 
 function seedData() {
@@ -134,10 +154,15 @@ function loadData() {
  * —— 合并无法区分「外部新增」与「本进程删除」，会把手动删掉的记录又复活。
  * 改为：先备份外部版本，再以本进程内存为准落盘，并明确告警，把处置权交还用户。 */
 let lastMtimeMs = 0;
+let lastDailySnapDay = '';
 function saveData(d) {
   try {
     const st = fs.statSync(DATA_FILE);
-    if (!hasSnapshotForDay(dayStr())) createSnapshot('daily');
+    const today = dayStr();
+    if (lastDailySnapDay !== today) {
+      const daily = hasSnapshotForDay(today) || createSnapshot('daily');
+      if (daily) lastDailySnapDay = today;
+    }
     if (lastMtimeMs && st.mtimeMs !== lastMtimeMs) {
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const conflictPath = `${DATA_FILE}.conflict-${stamp}`;
@@ -174,7 +199,8 @@ function createSnapshot(reason) {
   if (!fs.existsSync(DATA_FILE)) return null;
   try {
     fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
-    const stamp = `${dayStr()}T${new Date().toISOString().slice(11).replace(/[:.]/g, '-')}`;
+    const now = new Date();
+    const stamp = `${dayStr()}T${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
     const id = `snapshot-${stamp}-${reason}-${crypto.randomBytes(3).toString('hex')}`;
     const full = path.join(SNAPSHOT_DIR, `${id}.json`);
     fs.copyFileSync(DATA_FILE, full);
@@ -339,6 +365,37 @@ function normalizeTables(v) {
     };
   }).filter((x) => x.cols.length || x.rows.length);
 }
+/* 导入与快照恢复共用的 tasks 清洗：丢弃空标题，字段限长限类型，杜绝脏数据入库 */
+const cleanTasks = (input) => input.slice(0, 500).map((t) => {
+  const title = S(t && t.title, 120);
+  if (!title) return null;
+  const now = stampLocal(0, `${pad(new Date().getHours())}:${pad(new Date().getMinutes())}`);
+  return {
+    id: (typeof t.id === 'string' && /^t_[\w-]+$/.test(t.id)) ? t.id : uid('t'),
+    title,
+    host: S(t.host, 80),
+    status: STATUSES.includes(t.status) ? t.status : '进行中',
+    tags: normalizeTags(t.tags),
+    note: S(t.note, 1000),
+    todos: normalizeTodos(t.todos),
+    createdAt: S(t.createdAt, 16) || now,
+    updatedAt: S(t.updatedAt, 16) || now,
+    entries: (Array.isArray(t.entries) ? t.entries : []).slice(0, 2000).map((e) => ({
+      id: (e && typeof e.id === 'string' && /^e_[\w-]+$/.test(e.id)) ? e.id : uid('e'),
+      time: S(e && e.time, 16),
+      kind: KINDS.includes(e && e.kind) ? e.kind : '其他',
+      result: RESULTS.includes(e && e.result) ? e.result : '待验证',
+      title: S(e && e.title, 120),
+      detail: S(e && e.detail, 5000),
+      reviewAt: S(e && e.reviewAt, 16),
+      relation: normalizeRelation(e && e.relation),
+      images: normalizeImages(e && e.images),
+      tables: normalizeTables(e && e.tables),
+      files: normalizeFiles(e && e.files),
+    })).filter((e) => e.title),
+  };
+}).filter(Boolean);
+
 function removeUploads(urls) {
   for (const u of urls || []) {
     if (!/^\/uploads\/[\w.-]+$/.test(u)) continue;
@@ -377,14 +434,22 @@ const SECURITY_HEADERS = {
   'Referrer-Policy': 'no-referrer',
 };
 
-/* 真实客户端 IP：隧道场景下 socket 地址恒为 127.0.0.1，
- * 必须优先取 Cloudflare 注入的 CF-Connecting-IP，其次 X-Forwarded-For。
+/* 真实客户端 IP：
+ * - 立即 TCP 对端可信（TRUST_PROXY 显式开启，或同机 cloudflared / 本机反代连到回环/内网）时，
+ *   优先取 Cloudflare 注入的 CF-Connecting-IP，其次 X-Forwarded-For；
+ * - 对端不可信（公网直连）时这些头是攻击者随口编的，一律忽略、按 socket 真实地址判定，
+ *   否则伪造一个 `X-Forwarded-For: 127.0.0.1` 就能伪装内网把口令锁整个架空。
  * 登录失败计数与内网判定都必须走这里，否则公网访客会共用同一个计数桶。 */
+function peerTrusted(req) {
+  return TRUST_PROXY || isPrivateIp(req.socket.remoteAddress || '');
+}
 function clientIp(req) {
-  const cf = req.headers['cf-connecting-ip'];
-  if (cf) return String(cf).trim();
-  const xff = req.headers['x-forwarded-for'];
-  if (xff) return String(xff).split(',')[0].trim();
+  if (peerTrusted(req)) {
+    const cf = req.headers['cf-connecting-ip'];
+    if (cf) return String(cf).trim();
+    const xff = req.headers['x-forwarded-for'];
+    if (xff) return String(xff).split(',')[0].trim();
+  }
   return req.socket.remoteAddress || '?';
 }
 
@@ -416,8 +481,8 @@ function isAuthed(req) {
 }
 
 /* 内网免口令：直连的内网/本机来源直接放行；经隧道来的公网请求必须口令。
- * 判定时以 Cloudflare 注入的 CF-Connecting-IP（真实访客 IP）优先——
- * 因为隧道请求的 socket 地址恒为 127.0.0.1，只看来源 IP 会把公网口令锁整个架空。 */
+ * 判定统一走 clientIp()：同机隧道场景 socket 恒为回环，须靠可信对端注入的转发头还原真实访客 IP；
+ * 公网直连时 socket 地址本身就是真实来源，转发头不参与判定（见 clientIp 注释）。 */
 function isPrivateIp(ip) {
   if (!ip) return false;
   let s = String(ip).toLowerCase().trim();
@@ -441,6 +506,9 @@ function failRecord(ip) {
   const now = Date.now();
   let rec = loginFails.get(ip);
   if (!rec || now > rec.reset) { rec = { n: 0, reset: now + 5 * 60 * 1000 }; loginFails.set(ip, rec); }
+  if (loginFails.size > 512) {
+    for (const [key, val] of loginFails) if (now > val.reset) loginFails.delete(key);
+  }
   return rec;
 }
 function serveLogin(res) {
@@ -506,6 +574,8 @@ const routes = [
     try { restored = JSON.parse(fs.readFileSync(full, 'utf8')); } catch (_) { return json(res, 400, { error: '快照文件损坏，无法恢复' }); }
     try { restored = normalizeStoredData(restored); }
     catch (_) { return json(res, 400, { error: '快照内容不完整，无法恢复' }); }
+    /* 快照里的 tasks 也过一遍与导入一致的清洗，维持「入库必经清洗」的纵深防御 */
+    for (const manga of restored.mangas) manga.tasks = cleanTasks(manga.tasks);
     const assetDir = path.join(SNAPSHOT_DIR, id);
     const requiredAssets = allTasksOf(restored).flatMap((task) => (task.entries || []).flatMap((entry) => [
       ...(entry.images || []).map((item) => item.url), ...(entry.files || []).map((item) => item.url),
@@ -650,36 +720,6 @@ const routes = [
   }],
 
   ['POST', /^\/api\/import$/, (req, res, m, body) => {
-    const cleanTasks = (input) => input.slice(0, 500).map((t) => {
-      const title = S(t && t.title, 120);
-      if (!title) return null;
-      const now = stampLocal(0, `${pad(new Date().getHours())}:${pad(new Date().getMinutes())}`);
-      return {
-        id: (typeof t.id === 'string' && /^t_[\w-]+$/.test(t.id)) ? t.id : uid('t'),
-        title,
-        host: S(t.host, 80),
-        status: STATUSES.includes(t.status) ? t.status : '进行中',
-        tags: normalizeTags(t.tags),
-        note: S(t.note, 1000),
-        todos: normalizeTodos(t.todos),
-        createdAt: S(t.createdAt, 16) || now,
-        updatedAt: S(t.updatedAt, 16) || now,
-        entries: (Array.isArray(t.entries) ? t.entries : []).slice(0, 2000).map((e) => ({
-          id: (e && typeof e.id === 'string' && /^e_[\w-]+$/.test(e.id)) ? e.id : uid('e'),
-          time: S(e && e.time, 16),
-          kind: KINDS.includes(e && e.kind) ? e.kind : '其他',
-          result: RESULTS.includes(e && e.result) ? e.result : '待验证',
-          title: S(e && e.title, 120),
-          detail: S(e && e.detail, 5000),
-          reviewAt: S(e && e.reviewAt, 16),
-          relation: normalizeRelation(e && e.relation),
-          images: normalizeImages(e && e.images),
-          tables: normalizeTables(e && e.tables),
-          files: normalizeFiles(e && e.files),
-        })).filter((e) => e.title),
-      };
-    }).filter(Boolean);
-
     let importedMangas = null;
     let importedTasks = null;
     if (Array.isArray(body.mangas)) {
@@ -817,7 +857,8 @@ function serveStatic(req, res, pathname) {
   let isUpload = false;
   if (pathname.startsWith('/uploads/')) { base = UPLOAD_DIR; rel = path.basename(pathname); isUpload = true; }
   const filePath = path.normalize(path.join(base, rel));
-  if (!filePath.startsWith(base)) return notFound(res);
+  const within = path.relative(base, filePath);
+  if (!within || within === '..' || within.startsWith(`..${path.sep}`) || path.isAbsolute(within)) return notFound(res);
   fs.readFile(filePath, (err, buf) => {
     if (err) return notFound(res);
     const ext = path.extname(filePath).toLowerCase();
@@ -849,7 +890,9 @@ function notFound(res) {
 /* ---------------- 入口 ---------------- */
 async function handler(req, res) {
   const u = new URL(req.url, 'http://x');
-  const pathname = decodeURIComponent(u.pathname);
+  let pathname;
+  try { pathname = decodeURIComponent(u.pathname); }
+  catch (_) { return json(res, 400, { error: '请求路径编码非法' }); }
   try {
     /* 口令锁：设置了 ACCESS_CODE 时，公网来源要求登录；内网直连免口令 */
     if (ACCESS_CODE && !isLanRequest(req)) {
@@ -862,7 +905,7 @@ async function handler(req, res) {
           loginFails.delete(ip);
           res.writeHead(200, {
             'Content-Type': 'application/json; charset=utf-8',
-            'Set-Cookie': `auth=${AUTH_TOKEN}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${30 * 86400}`,
+            'Set-Cookie': `auth=${AUTH_TOKEN}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${30 * 86400}${SECURE_COOKIE ? '; Secure' : ''}`,
           });
           return res.end('{"ok":true}');
         }
@@ -918,7 +961,8 @@ async function handler(req, res) {
         if (!match) continue;
         let body = {};
         if (method === 'POST' || method === 'PATCH' || method === 'PUT') {
-          const limit = pathname.startsWith('/api/upload') ? 90 * 1024 * 1024 : 1024 * 1024;
+          // 图片接口硬上限 8MB，base64 后约 11MB，12MB 已含余量；其余接口 1MB
+          const limit = pathname.startsWith('/api/upload') ? 12 * 1024 * 1024 : 1024 * 1024;
           try { body = await readBody(req, limit); }
           catch (e) { return json(res, e.message === 'bad json' ? 400 : 413, { error: e.message === 'bad json' ? '请求体不是合法 JSON' : '请求体过大' }); }
         }

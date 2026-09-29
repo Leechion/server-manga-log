@@ -8,7 +8,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -322,6 +322,8 @@ const DEFAULT_STORE = {
   dataFile: DATA_FILE, uploadDir: UPLOAD_DIR, snapDir: SNAPSHOT_DIR,
   lastMtimeMs: 0, lastDailySnapDay: '', data: null,
 };
+/* 服务器状态缓存（/api/server-status，5 秒） */
+let serverStatusCache = { at: 0, payload: { disks: [], gpus: [] } };
 const stores = new Map([['', DEFAULT_STORE]]);
 /* 多用户：按需装载某个账号的数据域（首次访问时读盘，缺文件就建一份空的） */
 function ensureStore(name) {
@@ -922,6 +924,76 @@ const routes = [
     removeUploads(C, (removed.files || []).map((x) => x.url));
     saveData(C, C.data);
     return json(res, 200, { ok: true, task });
+  }],
+
+  /* ---- 服务器文件直取：本应用就跑在服务器上，路径里的文件可直接挂进格子 ---- */
+  ['POST', /^\/api\/server-list$/, (req, res, m, body, C) => {
+    const p = String(body.path || '').trim();
+    const absolute = p.startsWith('/') || /^[A-Za-z]:[\/\\]/.test(p);
+    if (!absolute) return json(res, 400, { error: '需要绝对路径（/… 或 C:/…）' });
+    let items;
+    try {
+      items = fs.readdirSync(p, { withFileTypes: true }).slice(0, 3000).map((d) => {
+        let size = 0, mtime = 0;
+        try { const st = fs.statSync(path.join(p, d.name)); size = st.size; mtime = st.mtimeMs; } catch (_) { /* 无权限的条目跳过属性 */ }
+        return { name: d.name, dir: d.isDirectory(), size, mtime };
+      });
+    } catch (e) {
+      return json(res, e.code === 'ENOENT' ? 404 : 400, { error: e.code === 'ENOENT' ? '目录不存在' : '目录不可读（权限？）' });
+    }
+    items.sort((a, b) => (a.dir !== b.dir) ? (a.dir ? -1 : 1) : a.name.localeCompare(b.name, 'zh-CN'));
+    return json(res, 200, { path: p, items });
+  }],
+
+  ['POST', /^\/api\/server-attach$/, (req, res, m, body, C) => {
+    const paths = (Array.isArray(body.paths) ? body.paths : []).slice(0, 10);
+    const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
+    const out = [];
+    for (const p of paths) {
+      if (typeof p !== 'string' || !(p.startsWith('/') || /^[A-Za-z]:[\/\\]/.test(p))) continue;
+      const name = path.basename(p);
+      const ext = extOf(name);
+      const stat = (() => { try { return fs.statSync(p); } catch (_) { return null; } })();
+      if (!stat || !stat.isFile()) continue;
+      if (stat.size > 50 * 1024 * 1024) { out.push({ name, error: '超过 50MB' }); continue; }
+      if (!IMAGE_EXTS.has(ext) && !DOC_EXTS.has(ext)) { out.push({ name, error: `不支持 .${ext || '(无后缀)'} 类型` }); continue; }
+      const fname = `${uid('u')}.${ext}`;
+      try {
+        fs.mkdirSync(C.uploadDir, { recursive: true });
+        fs.copyFileSync(p, path.join(C.uploadDir, fname));
+        out.push({ url: `/uploads/${fname}`, name, size: stat.size, image: IMAGE_EXTS.has(ext) });
+      } catch (_) { out.push({ name, error: '复制失败' }); }
+    }
+    return json(res, 200, { ok: true, files: out });
+  }],
+
+  /* ---- 服务器状态：磁盘 + GPU（5 秒缓存）---- */
+  ['GET', /^\/api\/server-status$/, (req, res, m, body, C) => {
+    if (Date.now() - serverStatusCache.at < 5000) return json(res, 200, serverStatusCache.payload);
+    const disks = [];
+    try {
+      const out = execSync('df -hP', { timeout: 4000 }).toString();
+      for (const line of out.split('\n').slice(1)) {
+        const cols = line.trim().split(/\s+/);
+        if (cols.length < 6) continue;
+        // Filesystem 可能含空格（Git Bash 的 C:/Program Files/Git），从行尾反向取后 5 列
+        const usePct = parseInt(cols[cols.length - 2], 10);
+        if (!Number.isFinite(usePct)) continue;
+        const fsCol = cols.slice(0, cols.length - 5).join(' ');
+        if (!/^\/dev\//.test(fsCol) && !/^[A-Za-z]:/.test(fsCol) && fsCol !== 'overlay') continue;
+        disks.push({ fs: fsCol, size: cols[cols.length - 5], used: cols[cols.length - 4], avail: cols[cols.length - 3], usePct, mount: cols[cols.length - 1] });
+      }
+    } catch (_) { /* df 不可用时给空列表 */ }
+    const gpus = [];
+    try {
+      const out = execSync('nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits', { timeout: 4000 }).toString();
+      for (const line of out.split('\n').filter((l) => l.trim())) {
+        const [index, name, util, mu, mt] = line.split(',').map((s) => s.trim());
+        gpus.push({ index: +index || 0, name: name || `GPU${index}`, util: +util || 0, memUsed: +mu || 0, memTotal: +mt || 0 });
+      }
+    } catch (_) { /* 无 GPU / 无驱动则隐藏 */ }
+    serverStatusCache = { at: Date.now(), payload: { disks, gpus } };
+    return json(res, 200, serverStatusCache.payload);
   }],
 ];
 

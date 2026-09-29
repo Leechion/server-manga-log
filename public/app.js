@@ -32,6 +32,8 @@ const state = {
   timelineFilters: { host: '', kind: '', result: '', from: '', to: '' },
   previewFile: null,
   comparisonCandidates: [],
+  lightboxList: [],
+  lightboxIndex: 0,
 };
 
 /* 条目表单内的附件草稿（提交时随格一起保存） */
@@ -498,6 +500,7 @@ function entryFormHTML(t, nextNo) {
         <button type="button" class="btn-mini rs" data-form="pick-img">📎 贴图</button>
         <button type="button" class="btn-mini rs" data-form="pick-doc">📄 文档</button>
         <button type="button" class="btn-mini rs" data-form="add-table">⊞ 表格</button>
+        <button type="button" class="btn-mini rs" data-form="pick-server">🖥 服务器文件</button>
         <span class="hint mono">截图可 Ctrl+V 粘贴或拖进细节框；日志/配置/PDF 等文档也可挂进格子</span>
       </div>
       <div id="imgStrip" class="img-strip hidden"></div>
@@ -756,6 +759,10 @@ function renderStats(stage) {
         </div>`;
       }).join('') : '<p class="stat-empty">暂无记录。</p>'}
     </section>
+    <section class="stat-block r1" id="serverStatusBlock">
+      <h3 class="stat-title">服务器状态</h3>
+      <div id="serverStatusBody"><div class="pv-note">读取中…</div></div>
+    </section>
     <section class="stat-block r2">
       <h3 class="stat-title">备份与搬家</h3>
       <p class="stat-note">每天首次改动会留快照；删除附件、导入覆盖和恢复前也会留一份。最多保留 40 份，自动快照连同记录引用的附件一起保存。手动 JSON 备份不含附件，搬家时需另拷 uploads/。</p>
@@ -770,9 +777,32 @@ function renderStats(stage) {
     </section>
   </div>
   <div class="tsuzuku"><span class="jp">つづく</span><span class="en mono">TO BE CONTINUED · 未完待续</span></div>`;
+  fillServerStatus();
 }
 
-/* ---------------- 附件：图片、文档与表格 ---------------- */
+/* ---------------- 服务器状态面板（磁盘 / GPU） ---------------- */
+async function fillServerStatus() {
+  const body = $('#serverStatusBody');
+  if (!body) return;
+  try {
+    const st = await api('/api/server-status');
+    const bar = (pct, warn) => `<div class="ss-bar-wrap"><div class="ss-bar ${warn ? 'ss-bar-warn' : ''}" style="width:${Math.min(100, pct)}%"></div></div>`;
+    const gpus = st.gpus.length ? st.gpus.map((g) => `
+      <div class="ss-row"><span class="mono ss-key">GPU${g.index}</span>
+        <div class="ss-bar-wrap">${bar(g.util)}</div>
+        <span class="mono ss-val">${g.util}% · ${g.memUsed}/${g.memTotal}MB</span></div>
+      <div class="ss-sub">${esc(g.name)}</div>`).join('') : '<div class="ss-sub">未检测到 NVIDIA GPU（或无驱动）</div>';
+    const disks = st.disks.map((d) => {
+      const warn = d.usePct >= 90;
+      return `<div class="ss-row ${warn ? 'ss-warn' : ''}"><span class="mono ss-key">${esc(d.mount)}</span>
+        ${bar(d.usePct, warn)}
+        <span class="mono ss-val">${d.used} / ${d.size}（${d.usePct}%）</span></div>`;
+    }).join('');
+    body.innerHTML = `${st.gpus.length ? `<div class="ss-label">GPU</div>${gpus}` : ''}<div class="ss-label">磁盘</div>${disks || '<div class="ss-sub">（无磁盘信息）</div>'}`;
+  } catch (e) {
+    body.innerHTML = `<div class="pv-note">读取失败：${esc(e.message)}</div>`;
+  }
+}
 async function handleFiles(files) {
   for (const file of Array.from(files)) {
     if (!/^image\/(png|jpe?g|gif|webp)$/.test(file.type)) { toast('仅支持 png / jpg / gif / webp', '啊！'); continue; }
@@ -810,13 +840,29 @@ async function handleDocFiles(files) {
   }
 }
 
-function openLightbox(url) {
-  $('#lightboxImg').src = url;
+function openLightbox(url, list) {
+  state.lightboxList = Array.isArray(list) && list.length ? list : [url];
+  state.lightboxIndex = Math.max(0, state.lightboxList.indexOf(url));
+  const many = state.lightboxList.length > 1;
+  $('#lbNav').classList.toggle('hidden', !many);
+  $('#lbPrev').classList.toggle('hidden', !many);
+  $('#lbNext').classList.toggle('hidden', !many);
+  renderLightbox();
   $('#lightbox').classList.remove('hidden');
+}
+function renderLightbox() {
+  $('#lightboxImg').src = state.lightboxList[state.lightboxIndex] || '';
+  $('#lbCounter').textContent = `${state.lightboxIndex + 1} / ${state.lightboxList.length}`;
+}
+function lightboxStep(step) {
+  if (!state.lightboxList.length) return;
+  state.lightboxIndex = (state.lightboxIndex + step + state.lightboxList.length) % state.lightboxList.length;
+  renderLightbox();
 }
 function closeLightbox() {
   $('#lightbox').classList.add('hidden');
   $('#lightboxImg').src = '';
+  state.lightboxList = [];
 }
 
 /* ---------------- 附件预览 ---------------- */
@@ -847,6 +893,16 @@ async function previewFile(url, name, size) {
       : '<option value="">没有其他可比较的文本附件</option>';
     $('#pvCompareRun').disabled = !state.comparisonCandidates.length;
   }
+  /* 配对汇总：当前文件是 json（逐例 metrics / 汇总）时，提供与其他 json 的数值配对 */
+  const metricsCandidates = ext === 'json' && size <= PREVIEW_TEXT_CAP
+    ? state.data.tasks.flatMap((task) => task.entries.flatMap((entry) => (entry.files || [])
+        .filter((file) => file.url !== url && extOf(file.name) === 'json' && file.size <= PREVIEW_TEXT_CAP)
+        .map((file) => ({ ...file, taskTitle: task.title }))))
+    : [];
+  state.pairCandidates = metricsCandidates;
+  $('#pvPair').classList.toggle('hidden', !metricsCandidates.length);
+  $('#pvPairFile').innerHTML = metricsCandidates.map((file, i) => `<option value="${i}">${esc(file.name)} · ${esc(file.taskTitle)}</option>`).join('');
+  $('#pvPairRun').disabled = !metricsCandidates.length;
   $('#filePreview').classList.remove('hidden');
   try {
     if (ext === 'pdf') {
@@ -882,7 +938,35 @@ async function previewFile(url, name, size) {
     const counter = lines.length > PREVIEW_LINE_CAP
       ? `前 ${PREVIEW_LINE_CAP} 行 / 共 ${lines.length} 行`
       : `共 ${lines.length} 行`;
-    body.innerHTML = `<div class="pv-count mono">${counter}</div><pre class="pv-text">${shown || '（空文件）'}</pre>`;
+    /* 训练日志自动解析（epoch x/y loss z 格式） */
+    const parsedLog = /\bepoch\s+\d+\s*\//.test(text) ? parseTrainingLog(text) : null;
+    let parseCard = '';
+    if (parsedLog && parsedLog.found) {
+      const rows = [
+        ['已完成轮数', `${parsedLog.done} / ${parsedLog.planned}`],
+        ['best loss', parsedLog.best ? `${parsedLog.best.loss} @ epoch ${parsedLog.best.epoch}` : '—'],
+        ['最终 loss', parsedLog.final ? `${parsedLog.final.loss} @ epoch ${parsedLog.final.epoch}` : '—'],
+        ['训练完成', parsedLog.complete ? '✓ 是' : '✗ 未完成'],
+      ];
+      if (parsedLog.outDir) rows.push(['产物目录', parsedLog.outDir]);
+      const table = { id: genId('tb'), title: `训练日志解析：${name.slice(0, 30)}`, cols: ['项目', '数值'], rows };
+      parseCard = `<div class="pv-parse-card"><div class="pv-parse-head">📈 识别到训练日志</div>`
+        + `<table class="e-table">${rows.map((r2) => `<tr><th>${esc(r2[0])}</th><td>${esc(r2[1])}</td></tr>`).join('')}</table>`
+        + ($('#entryForm') ? `<button id="pvInsertLog" class="btn primary rs" type="button">⬇ 插入为本格表格</button>` : '')
+        + `</div>`;
+      state.pendingParsedTable = table;
+    }
+    body.innerHTML = (parseCard || '')
+      + `<div class="pv-count mono">${counter}</div><pre class="pv-text">${shown || '（空文件）'}</pre>`;
+    $('#pvInsertLog')?.addEventListener('click', () => {
+      const t2 = state.pendingParsedTable;
+      if (!t2) return;
+      formTables.push({ ...t2, cols: [...t2.cols], rows: t2.rows.map((r) => [...r]) });
+      renderTableEditors();
+      closePreview();
+      $('#tableEditors')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      toast('解析表已插入！', '成！');
+    });
   } catch (e) {
     body.innerHTML = `<div class="pv-note">预览失败：${esc(e.message)}</div>`;
   }
@@ -935,6 +1019,189 @@ async function comparePreviewFiles() {
     const rows = diffRows(before, after);
     body.innerHTML = `<div class="pv-diff-labels"><strong>当前：${esc(current.name)}</strong><strong>对照：${esc(other.name)}</strong></div><div class="pv-diff">${rows.map((row) => `<div class="pv-diff-row"><div class="pv-diff-cell ${row.sa}"><span class="pv-ln">${row.an ?? ''}</span><code>${esc(row.a)}</code></div><div class="pv-diff-cell ${row.sb}"><span class="pv-ln">${row.bn ?? ''}</span><code>${esc(row.b)}</code></div></div>`).join('')}</div>${before.split('\n').length > PREVIEW_LINE_CAP || after.split('\n').length > PREVIEW_LINE_CAP ? '<p class="pv-note">差异仅展示前 2000 行。</p>' : ''}`;
   } catch (e) { body.innerHTML = `<div class="pv-note">比较失败：${esc(e.message)}</div>`; }
+}
+
+/* ---------------- 配对汇总：两份逐例 metrics / 汇总的数值配对 ---------------- */
+function parseNumericJson(json) {
+  if (Array.isArray(json)) {
+    const rows = json.filter((r) => r && typeof r === 'object' && !Array.isArray(r));
+    if (!rows.length) return null;
+    const keys = new Set();
+    for (const r of rows) for (const [k, v] of Object.entries(r)) if (typeof v === 'number' && Number.isFinite(v)) keys.add(k);
+    if (!keys.size) return null;
+    const nameKey = rows.some((r) => typeof r.name === 'string' && r.name) ? 'name'
+      : (rows.some((r) => typeof r.case === 'string') ? 'case' : null);
+    return { type: 'cases', rows, keys: [...keys], nameKey };
+  }
+  if (json && typeof json === 'object') {
+    const metrics = Object.entries(json)
+      .filter(([k, v]) => v && typeof v === 'object' && Number.isFinite(v.mean))
+      .map(([k, v]) => ({ key: k, mean: v.mean, std: Number.isFinite(v.std) ? v.std : 0 }));
+    return metrics.length ? { type: 'summary', metrics } : null;
+  }
+  return null;
+}
+function metricStats(values) {
+  const n = values.length;
+  const mean = values.reduce((s, v) => s + v, 0) / n;
+  const std = Math.sqrt(values.reduce((s, v) => s + (v - mean) ** 2, 0) / n); // 总体标准差（同 np.std 默认）
+  return { mean, std, n };
+}
+async function runMetricsPair() {
+  const current = state.previewFile;
+  const other = state.pairCandidates[+$('#pvPairFile').value];
+  if (!current || !other) return;
+  const body = $('#pvBody');
+  body.innerHTML = '<div class="pv-note">正在读取并配对…</div>';
+  try {
+    const [ta, tb] = await Promise.all([(await fetch(current.url)).text(), (await fetch(other.url)).text()]);
+    const pa = parseNumericJson(JSON.parse(ta));
+    const pb = parseNumericJson(JSON.parse(tb));
+    if (!pa || !pb) throw new Error('有一份文件不是可识别的数值表（需要逐例数组或 mean/std 汇总对象）');
+    const LOWER_BETTER = /^(rmse|time|loss|err|error|mse|mae)/i;
+    const fmtMs = (mean, std) => `${mean.toFixed(4)} ± ${std.toFixed(4)}`;
+    let cols, rows, note;
+    if (pa.type === 'cases' && pb.type === 'cases') {
+      const keys = pa.keys.filter((k) => pb.keys.includes(k));
+      if (!keys.length) throw new Error('两份文件没有共同的数值字段');
+      const nameKey = pa.nameKey && pb.nameKey ? 'name' : null;
+      const mapB = new Map(pb.rows.map((r, i) => [nameKey ? String(r[pb.nameKey]) : String(i), r]));
+      const deltas = {}; keys.forEach((k) => { deltas[k] = []; });
+      let matched = 0, skipped = 0;
+      for (const r of pa.rows) {
+        const b = mapB.get(nameKey ? String(r[pa.nameKey]) : String(pa.rows.indexOf(r)));
+        if (!b) { skipped++; continue; }
+        matched++;
+        for (const k of keys) {
+          const dv = Number(b[k]) - Number(r[k]);
+          if (Number.isFinite(dv)) deltas[k].push(dv);
+        }
+      }
+      if (!matched) throw new Error('两份文件没有可配对的病例（name 对不上）');
+      cols = ['指标', 'A 均值±标准差', 'B 均值±标准差', '配对差 (B−A)', 'B 改善 / 配对'];
+      rows = keys.map((k) => {
+        const aStats = metricStats(pa.rows.map((r) => Number(r[k])).filter(Number.isFinite));
+        const bStats = metricStats(pb.rows.map((r) => Number(r[k])).filter(Number.isFinite));
+        const ds = deltas[k];
+        const dMean = ds.length ? ds.reduce((s, v) => s + v, 0) / ds.length : NaN;
+        const lower = LOWER_BETTER.test(k);
+        const improved = ds.filter((v) => (lower ? v < 0 : v > 0)).length;
+        return [k + (lower ? '（越低越好）' : ''), fmtMs(aStats.mean, aStats.std), fmtMs(bStats.mean, bStats.std),
+          Number.isFinite(dMean) ? (dMean >= 0 ? '+' : '') + dMean.toFixed(4) : '—',
+          `${improved} / ${matched}`];
+      });
+      note = `配对 ${matched} 例${skipped ? `，跳过 ${skipped} 例（只在一侧出现）` : ''}`;
+      if (!nameKey) note += '（文件无 name 字段，按顺序配对）';
+    } else {
+      const toSummary = (p) => p.type === 'summary' ? p.metrics
+        : p.keys.map((k) => { const st = metricStats(p.rows.map((r) => Number(r[k])).filter(Number.isFinite)); return { key: k, mean: st.mean, std: st.std }; });
+      const ma = toSummary(pa); const mb = toSummary(pb);
+      const keys = ma.filter((m) => mb.some((x) => x.key === m.key)).map((m) => m.key);
+      if (!keys.length) throw new Error('两份文件没有共同的数值字段');
+      const get = (list, k) => list.find((x) => x.key === k);
+      cols = ['指标', 'A 均值±标准差', 'B 均值±标准差', '均值差 (B−A)'];
+      rows = keys.map((k) => {
+        const x = get(ma, k); const y = get(mb, k);
+        const d = y.mean - x.mean;
+        const lower = LOWER_BETTER.test(k);
+        return [k + (lower ? '（越低越好）' : ''), fmtMs(x.mean, x.std), fmtMs(y.mean, y.std), (d >= 0 ? '+' : '') + d.toFixed(4)];
+      });
+      note = '汇总级对比（至少一侧是 summary，无逐例改善计数）';
+    }
+    const table = { id: genId('tb'), title: `配对汇总：${current.name.slice(0, 24)} vs ${other.name.slice(0, 24)}`, cols, rows };
+    body.innerHTML = `<div class="pv-count mono">${esc(note)}</div>`
+      + `<table class="e-table"><thead><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead>`
+      + `<tbody>${rows.map((r2) => `<tr>${r2.map((c) => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`
+      + `<div class="form-foot">${$('#entryForm') ? '<button id="pvInsertTable" class="btn primary rs" type="button">⬇ 插入为本格表格</button>' : '<span class="pv-note">在本格表单里打开预览，才能把表插进格子</span>'}</div>`;
+    $('#pvInsertTable')?.addEventListener('click', () => {
+      formTables.push({ ...table, cols: [...table.cols], rows: table.rows.map((r) => [...r]) });
+      renderTableEditors();
+      closePreview();
+      $('#tableEditors')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      toast('对比表已插入，可继续修改！', '成！');
+    });
+  } catch (e) {
+    body.innerHTML = `<div class="pv-note">配对失败：${esc(e.message)}</div>`;
+  }
+}
+
+/* ---------------- 服务器文件直取 ---------------- */
+function openServerPicker() {
+  const pathInput = $('#spPath');
+  if (!pathInput.value) pathInput.value = localStorage.getItem('manga-sp-path') || '/data2/lee';
+  $('#serverPicker').classList.remove('hidden');
+  listServerDir();
+}
+async function listServerDir() {
+  const p = $('#spPath').value.trim();
+  const list = $('#spList');
+  const absolute = p.startsWith('/') || /^[A-Za-z]:[\/\\]/.test(p);
+  if (!absolute) { list.innerHTML = '<div class="pv-note">需要绝对路径（/… 或 C:/…）</div>'; return; }
+  list.innerHTML = '<div class="pv-note">读取中…</div>';
+  try {
+    const res = await api('/api/server-list', { method: 'POST', body: JSON.stringify({ path: p }) });
+    localStorage.setItem('manga-sp-path', res.path);
+    state.spDir = res.path;
+    state.spItems = res.items;
+    state.spSelected = new Set();
+    renderServerList();
+  } catch (e) { list.innerHTML = `<div class="pv-note">${esc(e.message)}</div>`; }
+}
+function renderServerList() {
+  const items = state.spItems || [];
+  const list = $('#spList');
+  if (!items.length) { list.innerHTML = '<div class="pv-note">（空目录）</div>'; $('#spCount').textContent = ''; return; }
+  list.innerHTML = items.map((item) => {
+    const full = (state.spDir === '/' ? '' : state.spDir) + '/' + item.name;
+    if (item.dir) {
+      return `<div class="sp-row sp-dir" data-action="sp-cd" data-path="${esc(full)}" title="进入目录"><span>📁</span><span class="sp-name">${esc(item.name)}</span></div>`;
+    }
+    return `<label class="sp-row"><input type="checkbox" class="sp-check" data-path="${esc(full)}" data-name="${esc(item.name)}" data-size="${item.size || 0}">
+      <span>📄</span><span class="sp-name">${esc(item.name)}</span><span class="fc-size mono">${fmtSize(item.size)}</span></label>`;
+  }).join('');
+  $('#spCount').textContent = `${items.filter((x) => x.dir).length} 个目录 / ${items.filter((x) => !x.dir).length} 个文件`;
+}
+async function attachSelectedServerFiles() {
+  const picks = [...document.querySelectorAll('.sp-check:checked')].map((c) => ({ path: c.dataset.path, name: c.dataset.name }));
+  if (!picks.length) { toast('先勾选要挂的文件', '嗯？'); return; }
+  try {
+    const res = await api('/api/server-attach', { method: 'POST', body: JSON.stringify({ paths: picks.map((p) => p.path) }) });
+    let img = 0, doc = 0;
+    const errs = [];
+    for (const file of res.files) {
+      if (file.error) { errs.push(`${file.name}：${file.error}`); continue; }
+      if (file.image && formImages.length < 9) { formImages.push({ id: genId('im'), url: file.url, name: file.name }); img++; }
+      else if (!file.image && formFiles.length < 10) { formFiles.push({ id: genId('f'), url: file.url, name: file.name, size: file.size }); doc++; }
+      else errs.push(`${file.name}：数量已达上限`);
+    }
+    renderImgStrip();
+    renderFileStrip();
+    closeServerPicker();
+    toast(`已挂上：图 ${img} · 文档 ${doc}` + (errs.length ? `（${errs.length} 个跳过）` : ''), '挂！');
+  } catch (e) { toast(e.message, '啊！'); }
+}
+function closeServerPicker() { $('#serverPicker').classList.add('hidden'); }
+
+/* ---------------- 训练日志解析 ---------------- */
+function parseTrainingLog(text) {
+  const epochs = [];
+  const re = /epoch\s+(\d+)\s*\/\s*(\d+)\s*[,:：]?\s*loss\s+([\d.]+(?:[eE][+-]?\d+)?)/gi;
+  let m;
+  while ((m = re.exec(text))) epochs.push({ epoch: +m[1], total: +m[2], loss: +m[3] });
+  const complete = /training complete[:：]?\s*(\S*)/i.exec(text);
+  let best = null;
+  for (const e of epochs) if (!best || e.loss < best.loss) best = e;
+  const last = epochs[epochs.length - 1] || null;
+  return {
+    found: epochs.length > 0,
+    count: epochs.length,
+    done: last ? last.epoch : 0,
+    planned: last ? last.total : 0,
+    best: best ? { epoch: best.epoch, loss: best.loss } : null,
+    final: last ? { epoch: last.epoch, loss: last.loss } : null,
+    complete: Boolean(complete),
+    outDir: complete ? complete[1] : '',
+  };
 }
 
 /* ---------------- 交互：刷新（支持草稿保护） ---------------- */
@@ -1857,8 +2124,10 @@ document.addEventListener('click', (ev) => {
   else if (act === 'import-backup') {
     if (state.pendingImport) confirmImport();
     else $('#importFile').click();
-  } else if (act === 'view-img') openLightbox(el.dataset.url);
-  else if (act === 'preview-file') {
+  } else if (act === 'view-img') {
+    const urls = [...(el.closest('.e-imgs')?.querySelectorAll('.e-img') || [])].map((x) => x.dataset.url);
+    openLightbox(el.dataset.url, urls.length ? urls : [el.dataset.url]);
+  } else if (act === 'preview-file') {
     ev.preventDefault();
     previewFile(el.dataset.url, el.dataset.name, +el.dataset.size || 0);
   }
@@ -1870,12 +2139,16 @@ document.addEventListener('click', (ev) => {
   const act = el.dataset.form;
   if (act === 'pick-img') $('#imgFile')?.click();
   else if (act === 'pick-doc') $('#docFile')?.click();
+  else if (act === 'pick-server') openServerPicker();
   else if (act === 'del-img') {
     formImages = formImages.filter((x) => x.url !== el.dataset.url);
     renderImgStrip();
   } else if (act === 'del-file') {
     formFiles = formFiles.filter((x) => x.url !== el.dataset.url);
     renderFileStrip();
+  } else if (act === 'sp-cd') {
+    $('#spPath').value = el.dataset.path;
+    listServerDir();
   } else if (act === 'add-table') {
     if (formTables.length >= 5) { toast('一格最多 5 张表', '满！'); return; }
     syncTablesFromDom();
@@ -1952,6 +2225,28 @@ $('#lightbox').addEventListener('click', closeLightbox);
 $('#filePreview').addEventListener('click', (ev) => { if (ev.target === ev.currentTarget) closePreview(); });
 $('#pvClose').addEventListener('click', closePreview);
 $('#pvCompareRun').addEventListener('click', comparePreviewFiles);
+$('#pvPairRun').addEventListener('click', runMetricsPair);
+$('#spGo').addEventListener('click', listServerDir);
+$('#spPath').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); listServerDir(); } });
+$('#spAttach').addEventListener('click', attachSelectedServerFiles);
+$('#spClose').addEventListener('click', closeServerPicker);
+$('#serverPicker').addEventListener('click', (ev) => { if (ev.target === ev.currentTarget) closeServerPicker(); });
+$('#lbPrev').addEventListener('click', (ev) => { ev.stopPropagation(); lightboxStep(-1); });
+$('#lbNext').addEventListener('click', (ev) => { ev.stopPropagation(); lightboxStep(1); });
+/* 命令块一键复制（选中文本时不打扰） */
+document.addEventListener('click', (ev) => {
+  const block = ev.target.closest('.t-cmd');
+  if (!block || ev.target.closest('a') || String(window.getSelection() || '').trim()) return;
+  const text = block.textContent.replace(/^\$\s?/, '').replace(/\s+$/, '');
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(() => toast('命令已复制', '拷！')).catch(() => {});
+  else {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); toast('命令已复制', '拷！'); } catch (_) { /* 忽略 */ }
+    ta.remove();
+  }
+});
 document.addEventListener('submit', (ev) => {
   if (ev.target.id === 'todoForm') { ev.preventDefault(); addTodo(ev.target); }
 });
@@ -2004,7 +2299,12 @@ document.addEventListener('keydown', (ev) => {
     closeMangaModal();
     closeLightbox();
     closePreview();
+    closeServerPicker();
     return;
+  }
+  if (!$('#lightbox').classList.contains('hidden')) {
+    if (ev.key === 'ArrowLeft') { lightboxStep(-1); return; }
+    if (ev.key === 'ArrowRight') { lightboxStep(1); return; }
   }
   if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter' && !$('#modal').classList.contains('hidden')) {
     $('#taskForm').requestSubmit();

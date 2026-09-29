@@ -147,7 +147,29 @@
 
 <div id="toast" class="toast hidden" aria-live="polite"></div>
 <div id="lightbox" class="lightbox hidden" title="点击任意处关闭">
+  <button id="lbPrev" class="lb-nav lb-prev hidden" title="上一张 (←)">‹</button>
   <img id="lightboxImg" alt="查看大图">
+  <button id="lbNext" class="lb-nav lb-next hidden" title="下一张 (→)">›</button>
+  <div id="lbNav" class="lb-nav-wrap hidden"><span id="lbCounter" class="mono"></span></div>
+</div>
+<div id="serverPicker" class="overlay hidden" role="dialog" aria-modal="true" aria-label="从服务器选择文件">
+  <div class="modal preview-modal r2">
+    <div class="pv-head">
+      <span class="pv-icon" aria-hidden="true">🖥</span>
+      <span class="pv-name">服务器文件</span>
+      <span class="flex"></span>
+      <button id="spClose" class="btn-icon" title="关闭 (Esc)">✕</button>
+    </div>
+    <div class="sp-path-row">
+      <input id="spPath" class="ipt mono" type="text" placeholder="/data2/lee/…" autocomplete="off" spellcheck="false">
+      <button id="spGo" class="btn rs" type="button">列出</button>
+    </div>
+    <div id="spList" class="sp-list"><div class="pv-note">输入服务器上的绝对路径后点「列出」</div></div>
+    <div class="form-foot">
+      <span id="spCount" class="hint mono"></span>
+      <button id="spAttach" class="btn primary rs" type="button">挂到格子</button>
+    </div>
+  </div>
 </div>
 <div id="filePreview" class="overlay hidden" role="dialog" aria-modal="true" aria-label="文件预览">
   <div class="modal preview-modal r2">
@@ -164,6 +186,12 @@
       <select id="pvCompareFile" class="ipt rs" aria-label="选择另一个配置文件"></select>
       <button id="pvCompareRun" class="btn rs" type="button">⇄ 比较这两个版本</button>
       <span class="hint">并排查看新增与删除行</span>
+    </div>
+    <div class="pv-compare hidden" id="pvPair">
+      <span class="mono">配对汇总</span>
+      <select id="pvPairFile" class="ipt rs" aria-label="选择另一份逐例 metrics"></select>
+      <button id="pvPairRun" class="btn rs" type="button">⚖ 生成配对汇总表</button>
+      <span class="hint">按病例自动配对，产出 均值±标准差 / 配对差 / 改善例数</span>
     </div>
     <div id="pvBody" class="pv-body"><div class="pv-note">读取中…</div></div>
   </div>

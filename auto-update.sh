@@ -1,7 +1,16 @@
 #!/bin/bash
 # 自动更新：拉取 GitHub 最新代码；server.js 有变动才重启应用（前端/文档免重启生效）
+# Node 查找顺序：PATH → nvm 最新版（本脚本已通用化，可随仓库分发到任意部署目录）
 cd "$(dirname "$0")" || exit 1
-export PATH="/home/lixiang/.nvm/versions/node/v24.18.0/bin:$PATH"
+NODE_BIN="$(command -v node || true)"
+if [ -z "$NODE_BIN" ]; then
+  NODE_BIN="$(ls "$HOME"/.nvm/versions/node/*/bin/node 2>/dev/null | sort -V | tail -1)"
+fi
+if [ -z "$NODE_BIN" ]; then
+  echo "[x] 找不到 node（PATH 与 ~/.nvm 里都没有）"
+  exit 1
+fi
+export PATH="$(dirname "$NODE_BIN"):$PATH"
 GIT() { git -c safe.directory='*' "$@"; }
 
 GIT fetch origin main -q || { echo "[$(date '+%F %T')] fetch 失败（网络/仓库不可达）"; exit 0; }

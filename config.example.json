@@ -4,5 +4,6 @@
   "port": 4780,
   "trustProxy": false,
   "secureCookie": false,
-  "users": []
+  "users": [],
+  "fileRoots": []
 }

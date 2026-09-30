@@ -48,6 +48,13 @@ const flagOf = (envVal, cfgVal) => (envVal != null ? /^(1|true|yes)$/i.test(Stri
 const TRUST_PROXY = flagOf(process.env.TRUST_PROXY, CFG.trustProxy);
 /* 会话 Cookie 加 Secure：外层是 HTTPS 隧道/反代时开启，防口令会话被降级窃听 */
 const SECURE_COOKIE = flagOf(process.env.SECURE_COOKIE, CFG.secureCookie);
+/* 「服务器文件」白名单根目录：只有落在这里面的路径才允许列出/挂载。
+ * 默认空 = 功能关闭（fail-safe）：这个接口能读进程权限内的任意文件（含 config.json
+ * 里的 accessCode 与全部口令），绝不能靠「用户只贴自己的数据目录」这种自觉来兜底。
+ * 配置示例：{ "fileRoots": ["/data2", "/mnt/datasets"] } */
+const FILE_ROOTS = (Array.isArray(CFG.fileRoots) ? CFG.fileRoots : [])
+  .map((p) => { try { return fs.realpathSync(String(p || '').trim()); } catch (_) { return ''; } })
+  .filter(Boolean);
 
 /* ---------------- 多用户模式 ----------------
  * config.users 非空即启用：每个账号在 users/<name>/ 下拥有独立的
@@ -926,23 +933,28 @@ const routes = [
     return json(res, 200, { ok: true, task });
   }],
 
-  /* ---- 服务器文件直取：本应用就跑在服务器上，路径里的文件可直接挂进格子 ---- */
+  /* ---- 服务器文件直取：本应用就跑在服务器上，路径里的文件可直接挂进格子 ----
+   * 路径必须先过 fileRoots 白名单（见 resolveServerPath）：这个接口能读进程权限内的
+   * 任意文件，单用户模式又常常免口令，不做白名单等于把整台机器交出去。 */
   ['POST', /^\/api\/server-list$/, (req, res, m, body, C) => {
     const p = String(body.path || '').trim();
     const absolute = p.startsWith('/') || /^[A-Za-z]:[\/\\]/.test(p);
     if (!absolute) return json(res, 400, { error: '需要绝对路径（/… 或 C:/…）' });
+    const resolved = resolveServerPath(p);
+    if (!resolved.ok) return json(res, 403, { error: resolved.reason });
+    const dir = resolved.real;
     let items;
     try {
-      items = fs.readdirSync(p, { withFileTypes: true }).slice(0, 3000).map((d) => {
+      items = fs.readdirSync(dir, { withFileTypes: true }).slice(0, 3000).map((d) => {
         let size = 0, mtime = 0;
-        try { const st = fs.statSync(path.join(p, d.name)); size = st.size; mtime = st.mtimeMs; } catch (_) { /* 无权限的条目跳过属性 */ }
+        try { const st = fs.statSync(path.join(dir, d.name)); size = st.size; mtime = st.mtimeMs; } catch (_) { /* 无权限的条目跳过属性 */ }
         return { name: d.name, dir: d.isDirectory(), size, mtime };
       });
     } catch (e) {
       return json(res, e.code === 'ENOENT' ? 404 : 400, { error: e.code === 'ENOENT' ? '目录不存在' : '目录不可读（权限？）' });
     }
     items.sort((a, b) => (a.dir !== b.dir) ? (a.dir ? -1 : 1) : a.name.localeCompare(b.name, 'zh-CN'));
-    return json(res, 200, { path: p, items });
+    return json(res, 200, { path: dir, items });
   }],
 
   ['POST', /^\/api\/server-attach$/, (req, res, m, body, C) => {
@@ -953,14 +965,18 @@ const routes = [
       if (typeof p !== 'string' || !(p.startsWith('/') || /^[A-Za-z]:[\/\\]/.test(p))) continue;
       const name = path.basename(p);
       const ext = extOf(name);
-      const stat = (() => { try { return fs.statSync(p); } catch (_) { return null; } })();
+      /* 与 server-list 同一道白名单：复制是把内容读出白名单的最后一跳，必须同样收口 */
+      const resolved = resolveServerPath(p);
+      if (!resolved.ok) { out.push({ name, error: resolved.reason }); continue; }
+      const real = resolved.real;
+      const stat = (() => { try { return fs.statSync(real); } catch (_) { return null; } })();
       if (!stat || !stat.isFile()) continue;
       if (stat.size > 50 * 1024 * 1024) { out.push({ name, error: '超过 50MB' }); continue; }
       if (!IMAGE_EXTS.has(ext) && !DOC_EXTS.has(ext)) { out.push({ name, error: `不支持 .${ext || '(无后缀)'} 类型` }); continue; }
       const fname = `${uid('u')}.${ext}`;
       try {
         fs.mkdirSync(C.uploadDir, { recursive: true });
-        fs.copyFileSync(p, path.join(C.uploadDir, fname));
+        fs.copyFileSync(real, path.join(C.uploadDir, fname));
         out.push({ url: `/uploads/${fname}`, name, size: stat.size, image: IMAGE_EXTS.has(ext) });
       } catch (_) { out.push({ name, error: '复制失败' }); }
     }
@@ -1042,6 +1058,25 @@ function readRaw(req, limit) {
 function extOf(name) {
   const m = /\.([A-Za-z0-9]{1,10})$/.exec(String(name || ''));
   return m ? m[1].toLowerCase() : '';
+}
+
+/* 校验「服务器文件」请求的路径是否落在白名单根目录内。
+ * 用 realpath 解析后再比对：既解掉 ../ 拼接，也解掉软链接——
+ * 否则在允许目录里放一个指向 /etc 的符号链接就能绕过前缀判断。
+ * 返回 { ok, real, reason }。 */
+function resolveServerPath(p) {
+  const raw = String(p || '').trim();
+  if (!raw) return { ok: false, reason: '路径不能为空' };
+  if (!FILE_ROOTS.length) return { ok: false, reason: '服务器文件功能未开放（需在 config.json 配置 fileRoots）' };
+  let real;
+  try { real = fs.realpathSync(raw); }
+  catch (e) { return { ok: false, reason: e.code === 'ENOENT' ? '路径不存在' : '路径不可读（权限？）' }; }
+  for (const root of FILE_ROOTS) {
+    if (real === root || real.startsWith(root.endsWith(path.sep) ? root : root + path.sep)) {
+      return { ok: true, real };
+    }
+  }
+  return { ok: false, reason: '路径不在允许目录内（fileRoots）' };
 }
 
 async function handleDocUpload(req, res, query, store) {

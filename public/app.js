@@ -24,6 +24,7 @@ const state = {
   query: '',
   view: 'toc',          // toc | timeline | inbox | stats
   statusFilter: '全部',
+  tagFilter: '',
   editTaskId: null,
   editMangaId: null,
   editEntryId: null,
@@ -141,6 +142,20 @@ function toast(text, sfx = '唰！') {
   toastTimer = setTimeout(() => el.classList.add('hidden'), 2000);
 }
 
+/* 剪贴板：安全上下文走异步 API，本地 http 场景退回 execCommand */
+function copyText(text, msg = '已复制') {
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(() => toast(msg, '拷！')).catch(() => fallbackCopy(text, msg));
+  } else fallbackCopy(text, msg);
+}
+function fallbackCopy(text, msg) {
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); toast(msg, '拷！'); } catch (_) { /* 忽略 */ }
+  ta.remove();
+}
+
 /* ---------------- 渲染：数据条 ---------------- */
 function weekCount() {
   const cutoff = Date.now() - 7 * 86400000;
@@ -170,13 +185,15 @@ function taskMatches(t, q) {
 function visibleTasks() {
   const q = state.query.trim().toLowerCase();
   return state.data.tasks.filter((t) =>
-    (state.statusFilter === '全部' || t.status === state.statusFilter) && taskMatches(t, q));
+    (state.statusFilter === '全部' || t.status === state.statusFilter)
+    && (!state.tagFilter || (t.tags || []).includes(state.tagFilter))
+    && taskMatches(t, q));
 }
 function renderToc() {
   const q = state.query.trim().toLowerCase();
   const list = $('#taskList');
   const tasks = visibleTasks();
-  const filtersActive = q || state.statusFilter !== '全部';
+  const filtersActive = q || state.statusFilter !== '全部' || state.tagFilter;
   if (filtersActive && tasks.length && !tasks.some((t) => t.id === state.currentId)) {
     state.currentId = tasks[0].id;
   }
@@ -203,6 +220,21 @@ function renderChips() {
   row.innerHTML = STATUSES.map((s) =>
     `<button type="button" class="fchip ${state.statusFilter === s ? 'active' : ''}" data-action="filter-status" data-status="${s}">${s}</button>`
   ).join('');
+}
+/* 目次的标签筛选行：只列当前漫画出现过的标签，附话数 */
+function tagCounts() {
+  const counts = new Map();
+  for (const t of state.data.tasks) for (const g of t.tags || []) counts.set(g, (counts.get(g) || 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-CN'));
+}
+function renderTagChips() {
+  const row = $('#tagChips');
+  if (!row) return;
+  const tags = tagCounts();
+  row.classList.toggle('hidden', !tags.length);
+  row.innerHTML = !tags.length ? '' :
+    `<button type="button" class="fchip ${state.tagFilter === '' ? 'active' : ''}" data-action="filter-tag" data-tag="">全部</button>`
+    + tags.map(([g, n]) => `<button type="button" class="fchip ${state.tagFilter === g ? 'active' : ''}" data-action="filter-tag" data-tag="${esc(g)}" title="${n} 话带此标签">#${esc(g)} · ${n}</button>`).join('');
 }
 function renderTabs() {
   const labels = { toc: ['tabToc', 'CONTENTS'], timeline: ['tabTimeline', 'TIMELINE'], inbox: ['tabInbox', 'INBOX'], stats: ['tabStats', 'EXTRA'] };
@@ -369,6 +401,7 @@ function panelHTML(e, idx, taskId = state.currentId) {
     <div class="e-foot">
       <span class="badge ${badgeCls}">${esc(badgeTxt)}</span>
       <span class="spacer"></span>
+      <button class="btn-icon" data-action="copy-entry" data-id="${esc(e.id)}" data-tid="${esc(taskId || '')}" title="复制本格为 Markdown">⧉ 复</button>
       <button class="btn-icon" data-action="edit-entry" data-id="${esc(e.id)}" data-tid="${esc(taskId || '')}" title="修改此格">✎ 改</button>
       <button class="btn-icon" data-action="del-entry" data-id="${esc(e.id)}" data-tid="${esc(taskId || '')}" title="撕掉此格">✕ 撕</button>
     </div>
@@ -577,7 +610,7 @@ function renderInbox(stage) {
     </div>
     <p class="inbox-intro">集中查看尚未确认结果的改动与遗留事项，点开一项即可回到原话。</p>
     <div class="inbox-columns">
-      <section><h3 class="stat-title">待验证改动</h3><div class="panels">${pendingEntries.length ? pendingEntries.map(({ task, entry }, i) => `<div class="inbox-record"><div class="timeline-context"><strong>${esc(task.title)}</strong>${task.host ? `<span class="chip">${esc(task.host)}</span>` : ''}<span class="mono">${esc(entry.reviewAt ? `复核 ${entry.reviewAt}` : entry.time || '')}</span><button class="btn-mini rs" data-action="open-inbox-entry" data-tid="${esc(task.id)}" data-eid="${esc(entry.id)}">打开原格 →</button></div>${panelHTML(entry, i, task.id)}</div>`).join('') : '<div class="toc-empty">当前没有待验证改动。</div>'}</div></section>
+      <section><h3 class="stat-title">待验证改动</h3><div class="panels">${pendingEntries.length ? pendingEntries.map(({ task, entry }) => `<div class="inbox-record"><div class="timeline-context"><strong>${esc(task.title)}</strong>${task.host ? `<span class="chip">${esc(task.host)}</span>` : ''}<span class="mono">${esc(entry.reviewAt ? `复核 ${entry.reviewAt}` : entry.time || '')}</span><button class="btn-mini rs" data-action="open-inbox-entry" data-tid="${esc(task.id)}" data-eid="${esc(entry.id)}">打开原格 →</button></div>${panelHTML(entry, task.entries.indexOf(entry), task.id)}</div>`).join('') : '<div class="toc-empty">当前没有待验证改动。</div>'}</div></section>
       <section><h3 class="stat-title">未完成事项</h3><div class="inbox-todos">${pendingTodos.length ? pendingTodos.map(({ task, todo }) => `<article class="inbox-todo"><span class="todo-mark">□</span><div><strong>${esc(todo.text)}</strong><div class="mono">${esc(task.host || '未填主机')} · ${esc(task.title)}</div></div><button class="btn-mini rs" data-action="open-inbox-todo" data-tid="${esc(task.id)}">回到本话 →</button></article>`).join('') : '<div class="toc-empty">没有遗留事项。</div>'}</div></section>
     </div>`;
 }
@@ -599,6 +632,7 @@ function renderStage() {
   }
 
   const idx = state.data.tasks.indexOf(t) + 1;
+  try { localStorage.setItem(`manga-log-current-${state.activeMangaId || ''}`, t.id); } catch (_) {}
   const entries = sortByTime(t.entries);
   const q = state.query.trim().toLowerCase();
   const shown = q ? entries.filter((e) => `${e.title} ${e.detail} ${e.kind} ${e.time}`.toLowerCase().includes(q)) : entries;
@@ -612,7 +646,7 @@ function renderStage() {
       <div class="ep-meta">
         ${t.host ? `<span class="chip">▣ ${esc(t.host)}</span>` : ''}
         <span class="status-stamp ${statusCls}">${esc(t.status)}</span>
-        ${(t.tags || []).map((g) => `<span class="chip tag">#${esc(g)}</span>`).join('')}
+        ${(t.tags || []).map((g) => `<button type="button" class="chip tag" data-action="filter-tag" data-tag="${esc(g)}" title="目次里筛选带此标签的话">#${esc(g)}</button>`).join('')}
       </div>
     </div>
     <div class="ep-actions">
@@ -642,6 +676,9 @@ function renderStage() {
      * 导致自动同步重绘 DOM 时，正在输入的单元格内容会被旧值覆盖。 */
     const tbEl = $('#tableEditors');
     if (tbEl) tbEl.addEventListener('input', (ev) => { if (ev.target.dataset.tf) syncTablesFromDom(); });
+    /* 草稿自动暂存：打字即防抖写 localStorage，误关页面/刷新后回到原话原格还在 */
+    form.addEventListener('input', scheduleDraftSave);
+    restoreSavedDraft();
     if (!state.editEntryId) form.querySelector('input[name="e-title"]')?.focus({ preventScroll: true });
   }
   if (state.editEntryId) $('#entryFormPanel')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -652,6 +689,7 @@ function renderAll() {
   renderMangaPicker();
   renderTabs();
   renderChips();
+  renderTagChips();
   renderToc();
   renderQuickSelect();
   renderStage();
@@ -818,6 +856,7 @@ async function handleFiles(files) {
       const out = await api('/api/upload', { method: 'POST', body: JSON.stringify({ name: file.name, dataUrl }) });
       formImages.push({ id: genId('im'), url: out.url, name: out.name });
       renderImgStrip();
+      scheduleDraftSave();
       toast('图贴上了！', '贴！');
     } catch (e) { toast(e.message, '啊！'); }
   }
@@ -835,6 +874,7 @@ async function handleDocFiles(files) {
       if (!res.ok) throw new Error(body.error || `上传失败 (${res.status})`);
       formFiles.push({ id: genId('f'), url: body.url, name: body.name, size: body.size });
       renderFileStrip();
+      scheduleDraftSave();
       toast('文档挂上了！', '挂！');
     } catch (e) { toast(e.message, '啊！'); }
   }
@@ -1176,6 +1216,7 @@ async function attachSelectedServerFiles() {
     }
     renderImgStrip();
     renderFileStrip();
+    scheduleDraftSave();
     closeServerPicker();
     toast(`已挂上：图 ${img} · 文档 ${doc}` + (errs.length ? `（${errs.length} 个跳过）` : ''), '挂！');
   } catch (e) { toast(e.message, '啊！'); }
@@ -1249,6 +1290,58 @@ function restoreEntryDraft(d) {
   renderTableEditors();
 }
 
+/* ---------------- 草稿本地暂存 ----------------
+ * 与 refresh({ preserve }) 的内存草稿互补：那套只挡 10 秒轮询重绘，
+ * 这套挡的是刷新页面/误关标签页——重新打开同一话同一格时自动回填。
+ * 单个 key 只存最近一份草稿，切到别的话不覆盖（上下文对不上就不回填）。 */
+const DRAFT_KEY = 'manga-log-entry-draft';
+let draftSaveTimer = null;
+function scheduleDraftSave() {
+  clearTimeout(draftSaveTimer);
+  draftSaveTimer = setTimeout(saveEntryDraft, 400);
+}
+function saveEntryDraft() {
+  const form = $('#entryForm');
+  if (!form) return;
+  const d = captureEntryDraft();
+  if (!d) return;
+  d.mangaId = state.activeMangaId || '';
+  d.savedAt = Date.now();
+  try { localStorage.setItem(DRAFT_KEY, JSON.stringify(d)); } catch (_) { /* 隐私模式等存不进就算了 */ }
+}
+function clearEntryDraft() {
+  clearTimeout(draftSaveTimer);
+  try { localStorage.removeItem(DRAFT_KEY); } catch (_) {}
+}
+function restoreSavedDraft() {
+  const form = $('#entryForm');
+  if (!form) return;
+  let d;
+  try { d = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch (_) { return; }
+  if (!d) return;
+  if (d.mangaId !== (state.activeMangaId || '') || d.taskId !== state.currentId || (d.editId || '') !== (state.editEntryId || '')) return;
+  const v = d.v || {};
+  const images = d.images || [];
+  const tables = d.tables || [];
+  const files = d.files || [];
+  const empty = !d.editId && !v.title && !v.detail && !v.reviewAt && !v.relation && !images.length && !tables.length && !files.length;
+  if (empty) return;
+  form['e-time'].value = v.time || '';
+  form['e-kind'].value = v.kind || '配置';
+  form['e-result'].value = v.result || '待验证';
+  form['e-title'].value = v.title || '';
+  form['e-detail'].value = v.detail || '';
+  form['e-review'].value = v.reviewAt || '';
+  form['e-related'].value = v.relation || '';
+  form['e-rel-type'].value = v.relationType || '相关';
+  formImages = images;
+  formTables = tables;
+  formFiles = files;
+  renderImgStrip();
+  renderFileStrip();
+  renderTableEditors();
+}
+
 async function refresh(opts = {}) {
   const [fresh, backupInfo] = await Promise.all([api('/api/data'), api('/api/snapshots')]);
   const draft = opts.preserve ? captureEntryDraft() : null;
@@ -1256,7 +1349,12 @@ async function refresh(opts = {}) {
   state.activeMangaId = fresh.activeMangaId || fresh.mangas?.[0]?.id || null;
   if (state.activeMangaId) localStorage.setItem('manga-log-active', state.activeMangaId);
   state.snapshots = backupInfo.snapshots || [];
-  if (!currentTask() && state.data.tasks.length) state.currentId = state.data.tasks[0].id;
+  if (!currentTask() && state.data.tasks.length) {
+    /* 回到上次读到的话（按漫画分别记）：误关页面/刷新后草稿才能跟着回到原格 */
+    let saved = '';
+    try { saved = localStorage.getItem(`manga-log-current-${state.activeMangaId || ''}`) || ''; } catch (_) {}
+    state.currentId = state.data.tasks.some((t) => t.id === saved) ? saved : state.data.tasks[0].id;
+  }
   if (!state.data.tasks.length) state.currentId = null;
   renderAll();
   if (draft) restoreEntryDraft(draft);
@@ -1351,6 +1449,7 @@ async function onMangaSubmit(ev) {
       state.view = 'toc';
       state.query = '';
       state.statusFilter = '全部';
+      state.tagFilter = '';
       state.timelineFilters = { host: '', kind: '', result: '', from: '', to: '' };
       $('#search').value = '';
       toast('新漫画，开篇！', '开！');
@@ -1367,6 +1466,7 @@ async function switchManga(id) {
   state.editEntryId = null;
   state.query = '';
   state.statusFilter = '全部';
+  state.tagFilter = '';
   $('#search').value = '';
   localStorage.setItem('manga-log-active', id);
   try {
@@ -1461,6 +1561,7 @@ async function onEntrySubmit(ev) {
     formImages = [];
     formTables = [];
     formFiles = [];
+    clearEntryDraft();
     await refresh();
   } catch (e) { toast(e.message, '啊！'); }
 }
@@ -1548,6 +1649,34 @@ function deleteTodo(btn) {
 }
 
 /* ---------------- 导出 ---------------- */
+/* 单格复制为 Markdown：周报 / 聊天里直接贴 */
+function entryToMd(e, task, tasks) {
+  const lines = [];
+  if (task) lines.push(`> 第${cnNum(tasks.indexOf(task) + 1)}话 · ${task.title}${task.host ? ` · ${task.host}` : ''}`, '');
+  lines.push(`### ${e.time || '—'} ｜ ${e.kind} ｜ ${e.result}`);
+  lines.push(`**${e.title}**`, '');
+  if (e.detail) lines.push(e.detail, '');
+  if (e.reviewAt) lines.push(`- 复核时间：${e.reviewAt}`);
+  const related = relationTarget(e.relation, tasks);
+  if (related) lines.push(`- ${e.relation.type || '相关'}：第${cnNum(tasks.indexOf(related.task) + 1)}话 · ${related.entry.title}`);
+  (e.images || []).forEach((im) => lines.push(`![${im.name}](${im.url})`));
+  (e.files || []).forEach((fl) => lines.push(`📄 [${fl.name}](${fl.url})${fl.size ? `（${fmtSize(fl.size)}）` : ''}`));
+  (e.tables || []).forEach((tb) => {
+    if (tb.title) lines.push(`**${tb.title}**`, '');
+    if (tb.cols.length) {
+      lines.push(`| ${tb.cols.join(' | ')} |`, `| ${tb.cols.map(() => '---').join(' | ')} |`);
+      (tb.rows || []).forEach((r) => lines.push(`| ${tb.cols.map((c, i) => (r[i] ?? '')).join(' | ')} |`));
+      lines.push('');
+    }
+  });
+  return lines.join('\n');
+}
+function copyEntryMd(btn) {
+  const task = state.data.tasks.find((t) => t.id === btn.dataset.tid);
+  const entry = task?.entries.find((e) => e.id === btn.dataset.id);
+  if (!task || !entry) return;
+  copyText(entryToMd(entry, task, state.data.tasks), '本格 Markdown 已复制');
+}
 function buildMd(tasks, mangaTitle = state.data.activeMangaTitle || '服务器改动', mangaTasks = tasks) {
   const lines = [];
   const total = tasks.reduce((s, t) => s + t.entries.length, 0);
@@ -1616,6 +1745,12 @@ function exportTaskMd() {
   if (!t) return;
   download(`漫画志_${t.title.slice(0, 20)}_${dayStr()}.md`, buildMd([t], state.data.activeMangaTitle, state.data.tasks));
   toast('本话导出齐了！', '齐！');
+}
+function exportMangaMd() {
+  const tasks = state.data.tasks;
+  if (!tasks.length) { toast('这一部还没有话，先开新话吧', '嗯？'); return; }
+  download(`漫画志_${(state.data.activeMangaTitle || '本部').slice(0, 30)}_${dayStr()}.md`, buildMd(tasks, state.data.activeMangaTitle, tasks));
+  toast('本部导出齐了！', '齐！');
 }
 async function exportBackup() {
   try {
@@ -2114,12 +2249,16 @@ document.addEventListener('click', (ev) => {
   else if (act === 'open-inbox-todo') jumpToTask(el.dataset.tid);
   else if (act === 'restore-snapshot') restoreSnapshot(el);
   else if (act === 'clear-timeline-filters') { state.timelineFilters = { host: '', kind: '', result: '', from: '', to: '' }; renderStage(); }
-  else if (act === 'cancel-edit-entry') { state.editEntryId = null; renderStage(); }
+  else if (act === 'cancel-edit-entry') { state.editEntryId = null; clearEntryDraft(); renderStage(); }
   else if (act === 'del-todo') deleteTodo(el);
   else if (act === 'filter-status') {
     state.statusFilter = el.dataset.status;
     renderChips(); renderToc(); renderStage();
-  } else if (act === 'export-task') exportTaskMd();
+  } else if (act === 'filter-tag') {
+    state.tagFilter = el.dataset.tag || '';
+    state.view = 'toc';
+    renderTabs(); renderTagChips(); renderToc(); renderStage();
+  } else if (act === 'copy-entry') copyEntryMd(el); else if (act === 'export-task') exportTaskMd();
   else if (act === 'export-backup') exportBackup();
   else if (act === 'import-backup') {
     if (state.pendingImport) confirmImport();
@@ -2143,9 +2282,11 @@ document.addEventListener('click', (ev) => {
   else if (act === 'del-img') {
     formImages = formImages.filter((x) => x.url !== el.dataset.url);
     renderImgStrip();
+    scheduleDraftSave();
   } else if (act === 'del-file') {
     formFiles = formFiles.filter((x) => x.url !== el.dataset.url);
     renderFileStrip();
+    scheduleDraftSave();
   } else if (act === 'sp-cd') {
     $('#spPath').value = el.dataset.path;
     listServerDir();
@@ -2154,10 +2295,12 @@ document.addEventListener('click', (ev) => {
     syncTablesFromDom();
     formTables.push({ id: genId('tb'), title: '', cols: ['项目', '数值'], rows: [['', '']] });
     renderTableEditors();
+    scheduleDraftSave();
   } else if (act === 'del-table') {
     syncTablesFromDom();
     formTables.splice(+el.dataset.ti, 1);
     renderTableEditors();
+    scheduleDraftSave();
   } else if (act === 'add-row') {
     syncTablesFromDom();
     const tb = formTables[+el.dataset.ti];
@@ -2165,6 +2308,7 @@ document.addEventListener('click', (ev) => {
     if (tb.rows.length >= 100) { toast('最多 100 行', '满！'); return; }
     tb.rows.push(tb.cols.map(() => ''));
     renderTableEditors();
+    scheduleDraftSave();
   } else if (act === 'add-col') {
     syncTablesFromDom();
     const tb = formTables[+el.dataset.ti];
@@ -2173,6 +2317,7 @@ document.addEventListener('click', (ev) => {
     tb.cols.push('');
     tb.rows.forEach((r) => r.push(''));
     renderTableEditors();
+    scheduleDraftSave();
   } else if (act === 'del-col') {
     syncTablesFromDom();
     const tb = formTables[+el.dataset.ti];
@@ -2180,6 +2325,7 @@ document.addEventListener('click', (ev) => {
     tb.cols.pop();
     tb.rows.forEach((r) => r.pop());
     renderTableEditors();
+    scheduleDraftSave();
   }
 });
 /* 表格编辑器输入同步 */
@@ -2233,19 +2379,11 @@ $('#spClose').addEventListener('click', closeServerPicker);
 $('#serverPicker').addEventListener('click', (ev) => { if (ev.target === ev.currentTarget) closeServerPicker(); });
 $('#lbPrev').addEventListener('click', (ev) => { ev.stopPropagation(); lightboxStep(-1); });
 $('#lbNext').addEventListener('click', (ev) => { ev.stopPropagation(); lightboxStep(1); });
-/* 命令块一键复制（选中文本时不打扰） */
+/* 命令块一键复制（选中文本时不打扰）；围栏块的提示符是 ⌨，命令行块是 $ */
 document.addEventListener('click', (ev) => {
   const block = ev.target.closest('.t-cmd');
   if (!block || ev.target.closest('a') || String(window.getSelection() || '').trim()) return;
-  const text = block.textContent.replace(/^\$\s?/, '').replace(/\s+$/, '');
-  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(() => toast('命令已复制', '拷！')).catch(() => {});
-  else {
-    const ta = document.createElement('textarea');
-    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-    document.body.appendChild(ta); ta.select();
-    try { document.execCommand('copy'); toast('命令已复制', '拷！'); } catch (_) { /* 忽略 */ }
-    ta.remove();
-  }
+  copyText(block.textContent.replace(/^[$⌨]\s?/, '').replace(/\s+$/, ''), '命令已复制');
 });
 document.addEventListener('submit', (ev) => {
   if (ev.target.id === 'todoForm') { ev.preventDefault(); addTodo(ev.target); }
@@ -2270,6 +2408,7 @@ $('#btnRenameManga').addEventListener('click', () => {
 $('#mangaSelect').addEventListener('change', (ev) => switchManga(ev.target.value));
 $('#mangaForm').addEventListener('submit', onMangaSubmit);
 $('#btnExport').addEventListener('click', exportMd);
+$('#btnExportManga').addEventListener('click', exportMangaMd);
 $('#btnLogout').addEventListener('click', async () => {
   try { await fetch('/api/logout', { method: 'POST', headers: { 'X-Requested-With': 'manga-log' } }); } catch (_) { /* 忽略 */ }
   location.href = '/';

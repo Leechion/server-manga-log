@@ -1516,3 +1516,7 @@ select option:checked { color: var(--paper); background: var(--ink); }
   .timeline-filters button { flex: 1 1 100%; }
   .timeline-item { padding-left: 14px; }
 }
+
+/* ---------- 标签筛选（目次标签行 + 分格页可点标签章） ---------- */
+.tag-chips { padding-bottom: 6px; }
+button.chip.tag:hover { background: var(--ink); color: var(--paper); }

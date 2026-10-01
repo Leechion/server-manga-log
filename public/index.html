@@ -50,6 +50,7 @@
     </label>
     <button id="btnRenameManga" class="btn-tiny rs" type="button" title="修改漫画名">✎ 改名</button>
     <button id="btnNewManga" class="btn-tiny rs" type="button">＋ 新漫画</button>
+    <button id="btnExportManga" class="btn-tiny rs" type="button" title="只导出当前漫画为 Markdown">⇩ 导出本部</button>
   </div>
 
   <form id="quickForm" class="quickbar" title="快记一笔：写入所选的话，类型按关键词自动识别">
@@ -70,6 +71,7 @@
         <span class="en mono" id="tocEn">CONTENTS</span>
       </div>
       <div id="statusChips" class="chip-row"></div>
+      <div id="tagChips" class="chip-row tag-chips hidden"></div>
       <div class="search-row">
         <input id="search" class="ipt rs" type="text" placeholder="⌕ 搜索改动 / 主机 / 标签…" autocomplete="off">
       </div>

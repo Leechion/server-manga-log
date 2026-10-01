@@ -515,7 +515,8 @@ function normalizeEntry(body) {
   if (!title) return { error: '改动标题不能为空' };
   return {
     value: {
-      id: body.id || uid('e'),
+      /* id 与导入清洗（cleanTasks）同规矩：客户端传来的必须形如 e_xxx，否则重新生成 */
+      id: (typeof body.id === 'string' && /^e_[\w-]+$/.test(body.id)) ? body.id : uid('e'),
       time: S(body.time, 16) || stampLocal(0, `${pad(new Date().getHours())}:${pad(new Date().getMinutes())}`),
       kind: KINDS.includes(body.kind) ? body.kind : '其他',
       result: RESULTS.includes(body.result) ? body.result : '待验证',
@@ -1166,6 +1167,9 @@ async function handler(req, res) {
       const methodM = req.method.toUpperCase();
       const user = sessionUser(req);
       if (pathname === '/api/login' && methodM === 'POST') {
+        /* 与注册同一道 CSRF 校验（登录页脚本本就携带该头）：
+         * 恶意页面无法用受害者浏览器静默提交登录表单、把人登进攻击者账号 */
+        if (req.headers['x-requested-with'] !== 'manga-log') return json(res, 403, { error: '跨站请求已拒绝' });
         let body = {};
         try { body = await readBody(req, 4096); } catch (_) { body = {}; }
         const name = String(body.name || '').trim().toLowerCase();
@@ -1227,6 +1231,8 @@ async function handler(req, res) {
       /* ---- 单用户模式：口令锁（公网来源要求登录；内网直连免口令） ---- */
       const ip = clientIp(req);
       if (pathname === '/api/login' && req.method.toUpperCase() === 'POST') {
+        /* 同多用户登录：写接口一律要求 X-Requested-With（登录页脚本本就携带） */
+        if (req.headers['x-requested-with'] !== 'manga-log') return json(res, 403, { error: '跨站请求已拒绝' });
         let body = {};
         try { body = await readBody(req, 4096); } catch (_) { body = {}; }
         if (failRecord(ip).n >= 20) return json(res, 429, { error: '错太多次了，休息 5 分钟再来' });
@@ -1287,8 +1293,11 @@ async function handler(req, res) {
         if (!match) continue;
         let body = {};
         if (method === 'POST' || method === 'PATCH' || method === 'PUT') {
-          // 图片接口硬上限 8MB，base64 后约 11MB，12MB 已含余量；其余接口 1MB
-          const limit = pathname.startsWith('/api/upload') ? 12 * 1024 * 1024 : 1024 * 1024;
+          // 图片接口硬上限 8MB，base64 后约 11MB，12MB 已含余量；
+          // 导入的是整份书架备份（纯文本也容易破 1MB），放宽到 64MB；其余接口 1MB
+          const limit = pathname.startsWith('/api/upload') ? 12 * 1024 * 1024
+            : pathname === '/api/import' ? 64 * 1024 * 1024
+            : 1024 * 1024;
           try { body = await readBody(req, limit); }
           catch (e) { return json(res, e.message === 'bad json' ? 400 : 413, { error: e.message === 'bad json' ? '请求体不是合法 JSON' : '请求体过大' }); }
         }

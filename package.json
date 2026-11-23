@@ -1,0 +1,17 @@
+{
+  "name": "leeconnect",
+  "version": "0.1.0",
+  "private": true,
+  "description": "LeeConnect - rebuilt from UU remote sample RE study (sandbox fixture)",
+  "scripts": {
+    "signaling": "node server/signaling.js",
+    "relay": "node server/relay.js",
+    "keygen": "node tools/keygen.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.23.0"
+  }
+}

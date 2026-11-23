@@ -1,0 +1,30 @@
+{
+  "extracted_from": "sandbox/uu/real/GameViewer.exe + GameViewerServer.exe (.rdata strings, triage-real/)",
+  "api_base": "https://api.nrd.nie.163.com",
+  "alt_hosts": {
+    "ipv4": "api-ipv4.nrd.nie.163.com",
+    "dcdn": "api-dcdn.nrd.nie.163.com",
+    "event": "api-event.nrd.nie.163.com",
+    "analytics": "fcount-api.webapp.163.com",
+    "crash": "sentry.netease.com/69 (dsn cf56b89184bf48f988f05813bee25cef)"
+  },
+  "endpoints": {
+    "auth": ["/api/v1/login/by_mobile", "/api/v1/login/by_qrcode", "/api/v1/login/by_uu_token", "/api/v1/login/by_mumu_token", "/api/v1/user/logout", "/api/v1/user/verify/realname", "/api/v1/qrcode/gen/login", "/api/v1/qrcode/login/status", "/api/v1/guest/create"],
+    "member": ["/api/v1/member/entitlements", "/api/v1/member/trial", "/api/v1/user/info", "/api/v1/user/ticket/for/plugin"],
+    "device": ["/api/v1/device/list", "/api/v1/device/controllable", "/api/v1/device/groups/of/my", "/api/v1/device/%s/preferences", "/api/v1/device/%s/reboot", "/api/v1/device/%s/screensaver[/detail|/custom]", "/api/v1/device/%s/wake_on_lan/req", "/api/v1/device/%s/unbind", "/api/v1/device/share/*", "/api/v1/device/uu_router_info", "/api/v1/device/router_wol_support"],
+    "session": ["/api/v1/room/notify/user/", "/api/v1/guest/room/create", "/api/v1/guest/room/share/confirmation", "/api/v1/app/cpc_device/preinstall/configure"],
+    "remote_assist": "verify semantics: remote_assist_verify_type / remote_assist_push / verification_code_rng (code + control_id)",
+    "cloud_pc": ["/api/v1/cloud_pc/create", "/api/v1/cloud_pc/init", "/api/v1/cloud_pc/boot_info/%s", "/api/v1/cloud_pc/queue/%s/ticket", "/api/v1/cloud_pc/sessions/", "/api/v1/cloud_pc/streaming_configure/", "/api/v1/cloud_pc/disks", "/api/v1/cloud_pc/network/speed", "/api/v1/cloud_pc/devices/"],
+    "misc": ["/api/v1/event/report/batch", "/api/v1/app/global/whitelist", "/api/v1/tool/configures_with_version", "/api/v1/release/fetch/popups/info", "/api/v1/campaign/*"]
+  },
+  "pairing": {
+    "code_flow": "6-digit-ish remote code + verify_type; control_id bound session",
+    "sdp": "Accept/Content-Type: application/sdp (custom SDP-over-HTTPS exchange, not std WebRTC signaling)",
+    "ice": "ice config update requested mode= / result=failed reason=invalid_state streamer_present="
+  },
+  "leeconnect_takeover": {
+    "strategy": "NET-001: hosts api.nrd.nie.163.com(+3) -> 127.0.0.1, cert SAN covered by tools/gen-cert.ps1, responses served by tools/mock-cloud.js (tested 3x200)",
+    "local_cloud": "signaling.js ws:9700 pairs devices; relay.js udp:9800 LEEC frames",
+    "entitlements_json_shape": "{code:0,msg:ok,data:{is_member:true,member_type:3,memberExpiredTime:<far>,entitlements:{...}}}"
+  }
+}

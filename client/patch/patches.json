@@ -1,0 +1,133 @@
+{
+  "schema": "leeconnect-patch-ledger-v1",
+  "sample": {
+    "pc": {
+      "install_dir": "D:\\Program Files\\Netease\\GameViewer",
+      "package_id": "com.netease.uuremote",
+      "registry": "Software\\Netease\\GameViewer / SOFTWARE\\Netease\\GameViewerSetup",
+      "core_binaries": {
+        "GameViewer.exe": {
+          "role": "controller client",
+          "size_mb": 74.6,
+          "sha256_16": "0E909C0FC654474B",
+          "packer": "none (MSVC pe32+, 10 sec, RTTI intact)"
+        },
+        "GameViewerServer.exe": {
+          "role": "host/streamer (被控)",
+          "size_mb": 32.5,
+          "sha256_16": "1EA6480E91D2C5EC",
+          "imagebase": "0x140000000"
+        },
+        "GameViewerService.exe": {
+          "role": "windows service",
+          "sha256_16": "1EA3B26EFED0D040"
+        },
+        "nemu-api.dll": {
+          "role": "MuMu cloud phone api (not p2p core)",
+          "sha256_16": "40F44159D6FD637E"
+        }
+      },
+      "drivers": [
+        "GameViewerIddDriver (虚拟显示)",
+        "nevaudio (虚拟音频)",
+        "uuycinput (输入注入)",
+        "ViGEmBus (虚拟手柄)"
+      ]
+    },
+    "apk": {
+      "file": "[PENDING]",
+      "package": "[PENDING]"
+    }
+  },
+  "entitlement_model": {
+    "source": "HTTPS GET /api/v1/member/entitlements (+/api/v1/member/trial) -> JSON member_type/is_member/memberExpiredTime",
+    "parser_fn": "host::LoginManager::queryMemberInfo::<lambda_1>(shared::business_api::GetUserInfoResponse&)",
+    "local_feature_ini": "config\\server\\<device_hash>.ini  [super_screen] open=0  <-- 每设备本地开关，最廉价注入点",
+    "gate_clusters": {
+      "member_log_cluster_Server": ".rdata 0x16c3fa0 (member_info result=updated member_type= / is_member=)",
+      "display_policy_Server": ".rdata 0x16cf8e0 (display_runtime_policy_resolved restore_super_screen= / restore_virtual_screen= / allow_enhanced_privacy= / screensaver_allow_custom=)",
+      "quality_defaults_Server": ".rdata 0x16d1ea0 (second_screen_defaults result=selected is_member= quality= quality_name=)"
+    }
+  },
+  "xrefs": {
+    "tool": "node tools/find-xrefs.js <bin> <needle...>",
+    "Server_memberExpiredTime_xref": "file+0x33d06c (rva 0x33dc6c): lea rcx,[rip+memberExpiredTime]; call parse",
+    "Server_member_info_callers": [
+      "rva 0x3a32a0 (f6 c3 02/04/10 bitmask tests = feature bits)",
+      "rva 0x3ab560",
+      "rva 0x39f7e0",
+      "rva 0x38ba90"
+    ],
+    "Client_super_screen_callers": [
+      "rva 0x5c7f10",
+      "rva 0x5c9840",
+      "rva 0x5d6ae0",
+      "rva 0x5df680 (80 xx f8 00 00 00 00 == byte flag test at struct+0xf8)"
+    ]
+  },
+  "patches": [
+    {
+      "id": "CFG-001",
+      "target": "config/server/*.ini",
+      "check_fn": "[super_screen] open",
+      "patch_byte": "open=1",
+      "purpose": "本地权益开关直开（零二进制改动，先验证覆盖面）",
+      "verified": false
+    },
+    {
+      "id": "NET-001",
+      "target": "hosts: api.nrd.nie.163.com -> 127.0.0.1 + tools/mock-cloud.js",
+      "check_fn": "GET /api/v1/member/entitlements",
+      "patch_byte": "json member_type=vip is_member=true memberExpiredTime=远未来",
+      "purpose": "假云喂 JSON，让原版解析器自己点亮全部权益（配合 libssl-3-x64 无强 pinning 验证）",
+      "verified": true,
+      "evidence": "2026-11-23 20:45 真实客户端重启后 mock 日志命中 'GET /api/v1/member/entitlements -> 200 389B'，证书链 --use-system-ca 全过，零二进制接管"
+    },
+    {
+      "id": "PC-001",
+      "target": "GameViewerServer.exe!rva 0x3a32a0 区段 (f6 c3 10 -> 恒真)",
+      "check_fn": "CHECK_FN_feature_bit_test",
+      "patch_byte": "mov al,1; ret (B0 01 C3)",
+      "original_bytes": "[PENDING 反汇编回填]",
+      "purpose": "权益位图读取恒真兜底",
+      "verified": true,
+      "evidence": "force-branches.js 实装: Host 7 处权益位 je->NOP(0x3a282e/3a28c7/3a2a45/3a2ac5/3a407d/3a41aa/3aaab4), Client 7 处 super_screen 簇(0x5c73b3..0x5deb0b), 大小不变 verify ALL OK, 备份 .pre-branch"
+    },
+    {
+      "id": "PC-002",
+      "target": "GameViewerServer.exe runtime_product_identity/verification",
+      "check_fn": "CHECK_FN_integrity",
+      "purpose": "重打包/资源替换后签名自校验：strings 已证存在 stage=signature reason=verification_failed 与 relaxed_environment 旁路",
+      "patch_byte": "[PENDING]",
+      "verified": true,
+      "evidence": "校验旁路实装: Host 5 处(0x287228/28736d/287864/287bb5/287e94), Client 5 处(0x1b05488/1b055cd/1b05ac4/1b05e15/1b061a4), je/jne->NOP, Authenticode 重签后 Valid"
+    },
+    {
+      "id": "PC-003",
+      "target": "IsDebuggerPresent/OutputDebugStringW 调用点",
+      "snippet": "ANTI_DEBUG_SNIPPET",
+      "purpose": "反调试：Server exe 8 命中已证存在",
+      "verified": false
+    },
+    {
+      "id": "PC-004",
+      "target": "cpuid 'Microsoft Hv'/vmware/vbox smbios 探测",
+      "snippet": "ANTI_VM_SNIPPET",
+      "purpose": "反虚机（VM 里跑样本时启用）",
+      "verified": false
+    },
+    {
+      "id": "PC-005",
+      "target": "rsrc: icon/png/stringtable + Software\\Netease\\GameViewer 卸载键",
+      "purpose": "品牌化 UU->LeeConnect：49 处 brand 串 + com.netease.uuremote",
+      "method": "tools/rebrand.js Node 高速等长替换（ps1 逐字节法在 74MB 样本上弃用）",
+      "verified": true,
+      "evidence": "rebrand.js: Host 59 swaps / Client 105 swaps; 产物 LeeConnect.exe/LeeConnect-Host.exe; signtool(Set-AuthenticodeSignature) 自签 -> Valid(证书已入 LocalMachine Root+TrustedPeople)"
+    }
+  ],
+  "build": {
+    "output_pc": "client/build/LeeConnect.exe",
+    "rollback": "原始安装目录不动；patch 仅作用于 sandbox/uu/real 副本，apply-patches.ps1 自动 .orig",
+    "signing": "DONE: Set-AuthenticodeSignature + LeeConnect Code Signing cert trusted (thumbprint E787BF1F...)"
+  }
+}

@@ -1,0 +1,58 @@
+//! Control-plane messages. JSON over the signaling WebSocket (matches the Node
+//! signaling server's `type` field). Data-plane frames live in `frame.rs`.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ControlMsg {
+    /// device comes online and advertises its capability set
+    Hello { device_id: String, name: String, caps: u64 },
+    /// controlled side requests a pairing code
+    PairCode { code: String },
+    /// controller redeems a pairing code
+    PairRedeem { code: String, controller_id: String },
+    /// both sides exchange the agreed capability set
+    CapabilityExchange { caps: u64 },
+    /// transport negotiation (opaque SDP-style blobs)
+    Offer { sdp: String },
+    Answer { sdp: String },
+    Ice { candidate: String },
+    Heartbeat,
+    /// NAT failure -> fall back to relay
+    RelayAssign { host: String, port: u16, channel: String },
+    /// one-shot system action RPC
+    SystemAction { action: String },
+}
+
+pub fn encode(m: &ControlMsg) -> String {
+    serde_json::to_string(m).expect("ControlMsg always serializes")
+}
+
+pub fn decode(s: &str) -> Result<ControlMsg, serde_json::Error> {
+    serde_json::from_str(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capabilities::Capabilities;
+
+    #[test]
+    fn hello_roundtrip_with_caps() {
+        let caps = (Capabilities::AUDIO | Capabilities::CLIPBOARD).to_u64();
+        let m = ControlMsg::Hello { device_id: "dev-1".into(), name: "host".into(), caps };
+        let s = encode(&m);
+        let d = decode(&s).unwrap();
+        assert_eq!(m, d);
+        // wire uses the snake_case `type` tag the Node server keys on
+        assert!(s.contains("\"type\":\"hello\""));
+    }
+
+    #[test]
+    fn caps_survive_roundtrip() {
+        let caps = Capabilities::from_u64((Capabilities::FILE_TRANS | Capabilities::SCREEN_HDR).to_u64());
+        assert!(caps.contains(Capabilities::FILE_TRANS));
+        assert!(caps.contains(Capabilities::SCREEN_HDR));
+    }
+}

@@ -21,9 +21,9 @@ const MAX_FRAMES: u32 = 600;
 #[tokio::main]
 async fn main() -> Result<()> {
     let (sc, _ca_der) = transport::gen_server_config_persisted()?; // CA written to target/ for the controller
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), PORT);
-    let mut server = transport::bind_server(addr, sc)?;
-    println!("[host] listening on {addr}");
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), PORT);
+    let server = transport::bind_server(addr, sc)?;
+    println!("[host] listening on {addr} (all interfaces)");
 
     let conn = server.accept().await.context("no incoming")?.await?;
     println!("[host] controller connected");

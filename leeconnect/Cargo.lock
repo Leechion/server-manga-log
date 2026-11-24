@@ -940,6 +940,7 @@ dependencies = [
  "bitflags 2.13.2",
  "eframe",
  "egui",
+ "image",
  "openh264",
  "quinn",
  "rcgen",

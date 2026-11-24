@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LeeConnect · macOS 风格原型</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<style>
+:root{
+  --page-sans:-apple-system,BlinkMacSystemFont,'SF Pro Text','Inter','PingFang SC','Microsoft YaHei UI','Microsoft YaHei',sans-serif;
+  --page-mono:'SF Mono','Cascadia Mono',Consolas,monospace;
+  --page-accent:#007AFF; --page-accent-ring:rgba(0,122,255,.32);
+  --page-green:#34C759; --page-red:#FF3B30; --page-orange:#FF9F0A;
+  --page-wall:radial-gradient(900px 600px at 18% 8%,rgba(255,236,214,.9),transparent 60%),radial-gradient(800px 700px at 92% 30%,rgba(158,196,214,.85),transparent 60%),linear-gradient(165deg,#f1dccb 0%,#dcb9a3 38%,#9fbacb 72%,#7096b0 100%);
+  --page-side:rgba(238,238,242,.66);
+  --page-content:#F6F6F8; --page-group:#FFFFFF; --page-edge:rgba(0,0,0,.07);
+  --page-text:#1D1D1F; --page-text-2:rgba(60,60,67,.64); --page-text-3:rgba(60,60,67,.38);
+  --page-sep:rgba(60,60,67,.12); --page-hover:rgba(0,0,0,.045); --page-sel:rgba(0,0,0,.075);
+  --page-btn:#FFFFFF; --page-btn-edge:rgba(0,0,0,.13); --page-field:#FFFFFF;
+  --page-pop:rgba(250,250,252,.86); --page-menu:rgba(246,246,248,.84);
+  --page-win-shadow:0 0 0 1px rgba(0,0,0,.12),0 24px 70px rgba(30,20,10,.32),0 8px 22px rgba(30,20,10,.14);
+  color-scheme:light;
+}
+html.dark{
+  --page-accent:#0A84FF; --page-accent-ring:rgba(10,132,255,.4);
+  --page-green:#30D158; --page-red:#FF453A;
+  --page-wall:radial-gradient(900px 600px at 18% 8%,rgba(92,70,52,.55),transparent 60%),radial-gradient(800px 700px at 92% 30%,rgba(40,74,96,.7),transparent 60%),linear-gradient(165deg,#2a2420 0%,#1f2228 45%,#132029 75%,#0b131a 100%);
+  --page-side:rgba(40,40,44,.62);
+  --page-content:#1F1F21; --page-group:#2B2B2E; --page-edge:rgba(255,255,255,.06);
+  --page-text:#F5F5F7; --page-text-2:rgba(235,235,245,.62); --page-text-3:rgba(235,235,245,.32);
+  --page-sep:rgba(255,255,255,.08); --page-hover:rgba(255,255,255,.06); --page-sel:rgba(255,255,255,.1);
+  --page-btn:#3A3A3D; --page-btn-edge:rgba(255,255,255,.08); --page-field:#1C1C1E;
+  --page-pop:rgba(44,44,48,.88); --page-menu:rgba(40,40,44,.86);
+  --page-win-shadow:0 0 0 1px rgba(0,0,0,.6),inset 0 0 0 1px rgba(255,255,255,.07),0 24px 70px rgba(0,0,0,.6),0 8px 22px rgba(0,0,0,.4);
+  color-scheme:dark;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--page-sans);font-size:13px;line-height:1.38;color:var(--page-text);-webkit-font-smoothing:antialiased;background:#9fbacb}
+button{font:inherit;color:inherit;background:none;border:0;cursor:default}
+.num{font-variant-numeric:tabular-nums}
+svg.lucide{width:16px;height:16px;stroke-width:1.6;flex-shrink:0}
+
+/* ── 桌面 ── */
+.desk{min-height:100vh;background:var(--page-wall);padding:22px 28px 56px;display:flex;flex-direction:column;align-items:center;gap:18px;transition:background .3s}
+.demo{width:min(1180px,100%);display:flex;align-items:center;gap:14px;flex-wrap:wrap;color:rgba(255,255,255,.92);font-size:12px}
+.demo .t{font-weight:600;font-size:13px;margin-right:auto;text-shadow:0 1px 2px rgba(0,0,0,.18)}
+.demo .lab{opacity:.85}
+.dseg{display:inline-flex;padding:2px;border-radius:8px;background:rgba(0,0,0,.18);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.dseg button{height:22px;padding:0 10px;border-radius:6px;color:rgba(255,255,255,.88);font-size:12px;font-weight:500}
+.dseg button.on{background:rgba(255,255,255,.92);color:#1d1d1f;box-shadow:0 1px 2px rgba(0,0,0,.15)}
+.winwrap{width:min(1180px,100%);overflow-x:auto;padding:4px 4px 30px;margin:-4px}
+
+/* ── 窗口 ── */
+.win{position:relative;min-width:960px;height:720px;border-radius:12px;overflow:hidden;display:flex;box-shadow:var(--page-win-shadow);isolation:isolate}
+.lights{position:absolute;top:18px;left:18px;display:flex;gap:8px;z-index:30}
+.lights i{width:12px;height:12px;border-radius:50%;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.18)}
+.lights .r{background:#FF5F57}.lights .y{background:#FEBC2E}.lights .g{background:#28C840}
+
+/* 侧栏（毛玻璃） */
+.side{width:224px;flex-shrink:0;display:flex;flex-direction:column;padding:52px 10px 10px;background:var(--page-side);backdrop-filter:blur(40px) saturate(180%);-webkit-backdrop-filter:blur(40px) saturate(180%);border-right:1px solid var(--page-sep);transition:width .28s cubic-bezier(.3,.7,.2,1),padding .28s,opacity .2s;overflow:hidden;white-space:nowrap}
+.win.collapsed .side{width:0;padding-left:0;padding-right:0;opacity:0;border-right-width:0}
+.sh{font-size:11px;font-weight:600;color:var(--page-text-3);padding:14px 10px 5px}
+.sh:first-child{padding-top:4px}
+.item{display:flex;align-items:center;gap:9px;width:100%;height:30px;padding:0 10px;border-radius:7px;text-align:left;transition:background .12s}
+.item:hover{background:var(--page-hover)}
+.item.sel{background:var(--page-sel)}
+.item svg.lucide{color:var(--page-accent);width:17px;height:17px}
+.item span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:13px}
+.item .dot{width:7px;height:7px;border-radius:50%;background:var(--page-green);box-shadow:0 0 0 3px color-mix(in srgb,var(--page-green) 16%,transparent)}
+.item.off span{color:var(--page-text-2)}
+.item.off svg.lucide{color:var(--page-text-3)}
+.item .me{font-size:11px;color:var(--page-text-3)}
+.side .grow{flex:1}
+.side-add{display:flex;align-items:center;gap:7px;height:28px;padding:0 10px;border-radius:7px;color:var(--page-text-2);font-size:12.5px}
+.side-add:hover{background:var(--page-hover);color:var(--page-text)}
+.side-add svg.lucide{width:15px;height:15px}
+
+/* 主区 */
+.main{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--page-content);position:relative}
+.tb{height:52px;flex-shrink:0;display:flex;align-items:center;gap:6px;padding:0 12px 0 14px;border-bottom:1px solid var(--page-sep);background:var(--page-content);transition:padding .28s}
+.win.collapsed .tb{padding-left:84px}
+.tbtn{width:30px;height:28px;border-radius:6px;display:grid;place-items:center;color:var(--page-text-2);transition:background .12s,color .12s}
+.tbtn:hover{background:var(--page-hover);color:var(--page-text)}
+.tbtn.on{color:var(--page-accent);background:color-mix(in srgb,var(--page-accent) 12%,transparent)}
+.tbtn svg.lucide{width:17px;height:17px}
+.ttl{margin-left:6px;min-width:0}
+.ttl .a{font-size:14px;font-weight:600;letter-spacing:-.1px;white-space:nowrap}
+.ttl .b{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--page-text-2);white-space:nowrap}
+.ttl .b i{width:6px;height:6px;border-radius:50%;background:var(--page-green);display:inline-block}
+.ttl .b i.off{background:var(--page-text-3)}
+.tb .sp{flex:1}
+.search{display:flex;align-items:center;gap:6px;width:190px;height:28px;padding:0 9px;border-radius:7px;background:var(--page-hover);color:var(--page-text-3)}
+.search svg.lucide{width:14px;height:14px}
+.search input{flex:1;min-width:0;border:0;outline:0;background:transparent;font:inherit;font-size:13px;color:var(--page-text)}
+.search input::placeholder{color:var(--page-text-3)}
+.search:focus-within{box-shadow:0 0 0 3px var(--page-accent-ring);background:var(--page-field)}
+.content{flex:1;min-height:0;position:relative}
+.view{position:absolute;inset:0;display:none}
+.win[data-state="idle"] .v-idle,.win[data-state="connecting"] .v-connecting,.win[data-state="live"] .v-live{display:block}
+.win[data-state="live"] .only-idle,.win:not([data-state="live"]) .only-live{display:none}
+
+/* 按钮 */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:28px;padding:0 14px;border-radius:7px;font-size:13px;font-weight:500;background:var(--page-btn);color:var(--page-text);box-shadow:0 0 0 1px var(--page-btn-edge),0 1px 1.5px rgba(0,0,0,.08);transition:filter .12s,transform .08s}
+.btn:active{filter:brightness(.94)}
+.btn.lg{height:32px;padding:0 20px;font-size:13.5px;border-radius:8px}
+.btn.pri{background:linear-gradient(180deg,color-mix(in srgb,var(--page-accent) 88%,white),var(--page-accent));color:#fff;box-shadow:0 0 0 1px color-mix(in srgb,var(--page-accent) 80%,black),0 1px 2px rgba(0,0,0,.14),inset 0 1px 0 rgba(255,255,255,.22)}
+.btn.red{background:linear-gradient(180deg,color-mix(in srgb,var(--page-red) 88%,white),var(--page-red));color:#fff;box-shadow:0 0 0 1px color-mix(in srgb,var(--page-red) 80%,black),inset 0 1px 0 rgba(255,255,255,.22)}
+.btn[disabled]{opacity:.42;filter:none}
+.btn:focus-visible,.tbtn:focus-visible,.item:focus-visible{outline:0;box-shadow:0 0 0 3px var(--page-accent-ring)}
+.link{color:var(--page-accent);font-size:12.5px}
+
+/* ── 未连接：设备详情 ── */
+.v-idle{overflow-y:auto}
+.detail{max-width:540px;margin:0 auto;padding:34px 24px 40px}
+.hero{display:flex;flex-direction:column;align-items:center;text-align:center}
+.dev-art{width:196px;margin-bottom:20px}
+.dev-art .scr{aspect-ratio:16/10;border-radius:11px;padding:5px;background:linear-gradient(#202124,#111214);box-shadow:0 14px 34px rgba(0,0,0,.2),0 2px 6px rgba(0,0,0,.12),inset 0 0 0 1px rgba(255,255,255,.07)}
+.dev-art .scr div{width:100%;height:100%;border-radius:7px;background:radial-gradient(70% 95% at 50% 108%,#a9cdff 0%,#4b86e6 24%,#1f53ae 48%,#0f2c66 74%,#081836 100%);position:relative;overflow:hidden}
+.dev-art .scr div::after{content:'';position:absolute;left:0;right:0;bottom:0;height:9%;background:rgba(24,28,38,.75)}
+.dev-art .neck{width:40px;height:22px;margin:0 auto;background:linear-gradient(90deg,#b9bdc3,#dfe2e6 50%,#b9bdc3);clip-path:polygon(18% 0,82% 0,100% 100%,0 100%)}
+.dev-art .foot{width:84px;height:6px;margin:0 auto;border-radius:4px 4px 2px 2px;background:linear-gradient(#e3e5e8,#b6bac0);box-shadow:0 3px 6px rgba(0,0,0,.12)}
+.dev-art .base{display:none;width:118%;margin-left:-9%;height:9px;border-radius:2px 2px 9px 9px;background:linear-gradient(#e6e8eb,#b4b8be);box-shadow:0 4px 10px rgba(0,0,0,.15)}
+.dev-art .base::before{content:'';display:block;width:18%;height:3px;margin:0 auto;border-radius:0 0 4px 4px;background:rgba(0,0,0,.12)}
+.dev-art.laptop .neck,.dev-art.laptop .foot{display:none}
+.dev-art.laptop .base{display:block}
+.dev-art.laptop .scr{border-radius:10px 10px 3px 3px}
+html.dark .dev-art .neck{background:linear-gradient(90deg,#55585e,#7a7d83 50%,#55585e)}
+html.dark .dev-art .foot,html.dark .dev-art .base{background:linear-gradient(#7d8086,#4c4f54)}
+.dev-art.off .scr div{filter:grayscale(1) brightness(.35)}
+.hero h1{font-size:22px;font-weight:600;letter-spacing:-.3px}
+.hero .st{display:flex;align-items:center;gap:6px;margin-top:4px;font-size:12.5px;color:var(--page-text-2)}
+.hero .st i{width:7px;height:7px;border-radius:50%;background:var(--page-green)}
+.hero .st i.off{background:var(--page-text-3)}
+.hero .acts{display:flex;gap:10px;margin-top:20px}
+.selfcode{display:none;align-items:center;gap:12px;margin-top:20px;padding:10px 12px 10px 16px;border-radius:12px;background:var(--page-group);box-shadow:0 0 0 1px var(--page-edge)}
+.selfcode .k{font-size:11.5px;color:var(--page-text-2);text-align:left}
+.selfcode .v{font-size:22px;font-weight:600;letter-spacing:2px}
+.detail.self .acts{display:none}.detail.self .selfcode{display:flex}
+.detail.self .opts{display:none}
+
+.gh{font-size:12px;font-weight:600;color:var(--page-text-2);margin:28px 6px 8px}
+.group{background:var(--page-group);border-radius:10px;box-shadow:0 0 0 1px var(--page-edge),0 1px 2px rgba(0,0,0,.03)}
+.row{position:relative;display:flex;align-items:center;gap:10px;min-height:40px;padding:0 14px}
+.row+.row::before{content:'';position:absolute;top:0;left:14px;right:0;height:1px;background:var(--page-sep)}
+.row .l{flex:1;font-size:13px}
+.row .v{font-size:13px;color:var(--page-text-2)}
+.popup{display:inline-flex;align-items:center;gap:3px;height:24px;padding:0 4px 0 9px;border-radius:6px;font-size:13px;color:var(--page-text-2);transition:background .12s}
+.popup:hover{background:var(--page-hover);color:var(--page-text)}
+.popup svg.lucide{width:13px;height:13px}
+.sw{position:relative;width:32px;height:19px;border-radius:10px;background:rgba(120,120,128,.24);transition:background .18s;flex-shrink:0}
+.sw::after{content:'';position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.22),0 0 0 .5px rgba(0,0,0,.04);transition:transform .18s cubic-bezier(.3,.7,.2,1)}
+.sw.on{background:var(--page-accent)}
+.sw.on::after{transform:translateX(13px)}
+
+/* ── 连接中 ── */
+.v-connecting{display:none}
+.win[data-state="connecting"] .v-connecting{display:grid;place-items:center}
+.conn{display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px}
+.spin{position:relative;width:30px;height:30px;margin-bottom:14px}
+.spin i{position:absolute;left:13.5px;top:1px;width:3px;height:8px;border-radius:2px;background:var(--page-text-2);transform-origin:1.5px 14px;opacity:.18}
+@media (prefers-reduced-motion:no-preference){.spin i{animation:spoke 1s linear infinite}}
+@keyframes spoke{0%{opacity:.85}100%{opacity:.18}}
+.conn .a{font-size:15px;font-weight:600}
+.conn .b{font-size:12.5px;color:var(--page-text-2);min-height:18px}
+.conn .btn{margin-top:18px}
+
+/* ── 已连接 ── */
+.v-live{background:#0A0A0B}
+.stagebox{position:absolute;inset:0;container-type:size;display:grid;place-items:center}
+.screen{position:relative;width:min(100cqw,calc(100cqh * 16 / 9));aspect-ratio:16/9;overflow:hidden;container-type:inline-size;font-family:'Segoe UI Variable','Segoe UI','Microsoft YaHei UI',var(--page-sans)}
+.wall{position:absolute;inset:0;background:radial-gradient(70% 95% at 50% 108%,#a9cdff 0%,#4b86e6 24%,#1f53ae 48%,#0f2c66 74%,#081836 100%)}
+.rwin{position:absolute;border-radius:.65cqw;overflow:hidden;box-shadow:0 1.6cqw 4cqw rgba(0,0,0,.35),0 0 0 1px rgba(255,255,255,.08)}
+.rwin .bar{height:2.5cqw;display:flex;align-items:center;gap:.6cqw;padding:0 1cqw;font-size:.95cqw}
+.term{left:7%;top:10%;width:46%;height:46%;background:rgba(14,14,18,.94)}
+.term .bar{background:rgba(255,255,255,.05);color:#d8dbe2}
+.term .bar b{font-weight:500;padding:.25cqw .8cqw;border-radius:.4cqw .4cqw 0 0;background:rgba(255,255,255,.06)}
+.term pre{padding:1.1cqw 1.3cqw;font-family:'Cascadia Mono',Consolas,monospace;font-size:1.05cqw;line-height:1.7;color:#cfd6e2;white-space:pre}
+.term .p{color:#7fb2ff}.term .ok{color:#7ed99c}.term .dim{color:#8a93a3}
+.expl{right:7%;top:20%;width:37%;height:44%;background:#F3F3F3;color:#1f1f1f}
+.expl .bar{background:#EBEBEB;font-weight:500}
+.expl .bd{display:flex;height:calc(100% - 2.5cqw)}
+.expl .nav{width:30%;padding:.8cqw .6cqw;border-right:1px solid #e1e1e1;font-size:.9cqw;color:#444;display:flex;flex-direction:column;gap:.45cqw}
+.expl .files{flex:1;padding:.8cqw 1cqw;display:flex;flex-direction:column;gap:.35cqw;font-size:.95cqw;background:#fff}
+.expl .f{display:flex;align-items:center;gap:.7cqw;padding:.25cqw .4cqw;border-radius:.3cqw}
+.expl .f:nth-child(2){background:#e5f0fb}
+.expl .ic{width:1.3cqw;height:1.05cqw;border-radius:.2cqw;background:#f4c542}
+.expl .ic.doc{width:1cqw;height:1.25cqw;background:#dfe6ee;border:1px solid #c8d1db}
+.task{position:absolute;left:0;right:0;bottom:0;height:4.4cqw;background:rgba(28,32,42,.8);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);display:flex;align-items:center;justify-content:center;gap:.7cqw}
+.task i{width:2.3cqw;height:2.3cqw;border-radius:.45cqw;background:rgba(255,255,255,.12)}
+.task i.st{background:conic-gradient(from 0deg,#4aa3ff 0 25%,#3d8ef0 0 50%,#4aa3ff 0 75%,#3d8ef0 0);border-radius:.3cqw;transform:scale(.8)}
+.task i.fo{background:linear-gradient(#ffd666,#f0b429)}
+.task i.tm{background:#1b1b1f;box-shadow:inset 0 0 0 1px rgba(255,255,255,.2)}
+.task i.ed{background:linear-gradient(135deg,#36c3ff,#1a7fd6 60%,#38d39f)}
+.task .clk{position:absolute;right:1.4cqw;text-align:right;color:#fff;font-size:.85cqw;line-height:1.35}
+
+/* HUD 浮动工具条 */
+.hud{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);display:flex;align-items:center;gap:2px;padding:5px;border-radius:14px;background:rgba(32,32,36,.72);backdrop-filter:blur(24px) saturate(170%);-webkit-backdrop-filter:blur(24px) saturate(170%);box-shadow:0 0 0 1px rgba(255,255,255,.1),0 12px 32px rgba(0,0,0,.45);z-index:5;transition:opacity .2s}
+.hb{position:relative;width:36px;height:34px;border-radius:9px;display:grid;place-items:center;color:rgba(255,255,255,.82);transition:background .12s,color .12s}
+.hb:hover{background:rgba(255,255,255,.12);color:#fff}
+.hb.on{background:rgba(10,132,255,.28);color:#6cb6ff}
+.hb svg.lucide{width:18px;height:18px}
+.hb.pw{color:#ff6b61}
+.hb.pw:hover{background:rgba(255,69,58,.2);color:#ff7d74}
+.hsep{width:1px;height:20px;background:rgba(255,255,255,.14);margin:0 4px}
+.hb[data-tip]:hover::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 10px);left:50%;transform:translateX(-50%);padding:3px 8px;border-radius:5px;background:rgba(30,30,32,.92);color:#fff;font-size:11.5px;white-space:nowrap;box-shadow:0 0 0 1px rgba(255,255,255,.1);pointer-events:none}
+.more-wrap{position:relative}
+
+/* 菜单 */
+.menu{position:absolute;bottom:calc(100% + 14px);left:50%;transform:translateX(-50%);width:218px;padding:5px;border-radius:10px;background:var(--page-menu);backdrop-filter:blur(30px) saturate(180%);-webkit-backdrop-filter:blur(30px) saturate(180%);box-shadow:0 0 0 1px rgba(0,0,0,.14),0 10px 30px rgba(0,0,0,.28);display:none;color:var(--page-text)}
+html.dark .menu{box-shadow:0 0 0 1px rgba(255,255,255,.1),0 10px 30px rgba(0,0,0,.5)}
+.menu.open{display:block}
+.mi{display:flex;align-items:center;gap:8px;width:100%;height:26px;padding:0 9px;border-radius:5px;font-size:13px;text-align:left}
+.mi svg.lucide{width:15px;height:15px;color:var(--page-text-2)}
+.mi .k{margin-left:auto;font-size:12px;color:var(--page-text-3)}
+.mi:hover:not([disabled]){background:var(--page-accent);color:#fff}
+.mi:hover:not([disabled]) svg.lucide,.mi:hover:not([disabled]) .k{color:rgba(255,255,255,.85)}
+.mi[disabled]{color:var(--page-text-3)}
+.mi[disabled] svg.lucide{color:var(--page-text-3)}
+.mi .ck{width:15px;display:grid;place-items:center}
+.msep{height:1px;margin:5px 9px;background:var(--page-sep)}
+
+/* 信息弹出框 */
+.pop{position:absolute;top:50px;right:10px;width:280px;padding:14px 16px 10px;border-radius:12px;background:var(--page-pop);backdrop-filter:blur(30px) saturate(180%);-webkit-backdrop-filter:blur(30px) saturate(180%);box-shadow:0 0 0 1px rgba(0,0,0,.1),0 14px 40px rgba(0,0,0,.22);z-index:20;display:none}
+html.dark .pop{box-shadow:0 0 0 1px rgba(255,255,255,.1),0 14px 40px rgba(0,0,0,.55)}
+.pop.open{display:block}
+.pop::before{content:'';position:absolute;top:-6px;right:18px;width:12px;height:12px;background:var(--page-pop);transform:rotate(45deg);border-radius:2px 0 0 0;box-shadow:-1px -1px 0 rgba(0,0,0,.06)}
+.pop .hd{display:flex;align-items:center;font-size:12px;font-weight:600;color:var(--page-text-2)}
+.pop .q{margin-left:auto;font-size:11.5px;font-weight:600;color:var(--page-green)}
+.pop .big{display:flex;align-items:baseline;gap:4px;margin-top:4px}
+.pop .big b{font-size:30px;font-weight:600;letter-spacing:-.6px}
+.pop .big span{font-size:13px;color:var(--page-text-2)}
+.pop svg.spark{display:block;width:100%;height:44px;margin:6px 0 8px}
+.kv{display:flex;justify-content:space-between;padding:6px 0;font-size:12.5px;border-top:1px solid var(--page-sep)}
+.kv .k{color:var(--page-text-2)}
+
+/* 通知 */
+.toast{position:absolute;top:62px;right:14px;width:300px;display:flex;gap:10px;padding:11px 12px;border-radius:14px;background:var(--page-pop);backdrop-filter:blur(30px) saturate(180%);-webkit-backdrop-filter:blur(30px) saturate(180%);box-shadow:0 0 0 1px rgba(0,0,0,.08),0 10px 30px rgba(0,0,0,.2);z-index:25;opacity:0;transform:translateX(16px);pointer-events:none;transition:opacity .25s ease-out,transform .25s ease-out}
+.toast.show{opacity:1;transform:none}
+.toast .tt{flex:1;min-width:0}
+.toast .m{font-size:13px;font-weight:600;display:flex}
+.toast .m span{margin-left:auto;font-weight:400;font-size:11.5px;color:var(--page-text-3)}
+.toast .s{font-size:12.5px;color:var(--page-text-2);margin-top:1px}
+
+/* 应用图标 */
+.appicon{--s:32px;width:var(--s);height:var(--s);border-radius:calc(var(--s) * .23);flex-shrink:0;display:grid;place-items:center;background:linear-gradient(160deg,#63B6FF 0%,#1A7BFF 52%,#0052D6 100%);box-shadow:inset 0 0 0 .5px rgba(255,255,255,.35),0 1px 3px rgba(0,0,0,.2)}
+.appicon svg{width:60%;height:60%}
+
+/* 遮罩、Sheet、Alert */
+.scrim{position:absolute;inset:0;z-index:40;display:none;background:rgba(0,0,0,.1)}
+.scrim.open{display:block}
+.sheet{position:absolute;top:64px;left:50%;width:400px;margin-left:-200px;padding:20px 20px 16px;border-radius:12px;background:var(--page-content);box-shadow:0 0 0 1px rgba(0,0,0,.12),0 20px 50px rgba(0,0,0,.3)}
+html.dark .sheet{background:#2A2A2D;box-shadow:0 0 0 1px rgba(255,255,255,.1),0 20px 50px rgba(0,0,0,.6)}
+@media (prefers-reduced-motion:no-preference){.scrim.open .sheet,.scrim.open .alert{animation:drop .22s ease-out}}
+@keyframes drop{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+.sheet h2{font-size:15px;font-weight:600}
+.sheet p{font-size:12.5px;color:var(--page-text-2);margin-top:4px}
+.code{display:flex;justify-content:center;gap:8px;margin:20px 0 22px}
+.code .g{width:12px}
+.code input{width:44px;height:52px;border:0;outline:0;border-radius:9px;text-align:center;font:600 22px var(--page-sans);font-variant-numeric:tabular-nums;color:var(--page-text);background:var(--page-field);box-shadow:0 0 0 1px var(--page-btn-edge),inset 0 1px 2px rgba(0,0,0,.05);caret-color:var(--page-accent);transition:box-shadow .12s}
+.code input:focus{box-shadow:0 0 0 1px var(--page-accent),0 0 0 4px var(--page-accent-ring)}
+.sheet .ft{display:flex;align-items:center;gap:8px}
+.sheet .ft .link{margin-right:auto}
+.alert{position:absolute;top:50%;left:50%;width:272px;margin:-130px 0 0 -136px;padding:20px 16px 16px;border-radius:14px;text-align:center;background:var(--page-pop);backdrop-filter:blur(30px) saturate(180%);-webkit-backdrop-filter:blur(30px) saturate(180%);box-shadow:0 0 0 1px rgba(0,0,0,.1),0 20px 50px rgba(0,0,0,.3)}
+html.dark .alert{box-shadow:0 0 0 1px rgba(255,255,255,.1),0 20px 50px rgba(0,0,0,.6)}
+.alert .appicon{--s:56px;margin:0 auto 12px}
+.alert h3{font-size:13px;font-weight:700}
+.alert p{font-size:11.5px;color:var(--page-text-2);margin-top:5px}
+.alert .ft{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px}
+.alert .btn{width:100%}
+
+@media (max-width:700px){.desk{padding:14px 10px 40px}.demo .t{width:100%}}
+</style>
+</head>
+<body>
+<div class="desk">
+  <div class="demo">
+    <span class="t">LeeConnect · macOS 风格原型</span>
+    <span class="lab">状态</span>
+    <div class="dseg" id="dState"><button data-s="idle" class="on">未连接</button><button data-s="connecting">连接中</button><button data-s="live">已连接</button></div>
+    <span class="lab">外观</span>
+    <div class="dseg" id="dTheme"><button data-t="light" class="on">浅色</button><button data-t="dark">深色</button></div>
+  </div>
+
+  <div class="winwrap">
+  <div class="win" id="win" data-state="idle">
+    <div class="lights"><i class="r"></i><i class="y"></i><i class="g"></i></div>
+
+    <aside class="side">
+      <div class="sh">我的设备</div>
+      <button class="item" data-i="0"><i data-lucide="monitor"></i><span>DESKTOP-M2SOF0N</span><em class="me">本机</em></button>
+      <button class="item sel" data-i="1"><i data-lucide="pc-case"></i><span>工位电脑</span><em class="dot"></em></button>
+      <div class="sh">其他设备</div>
+      <button class="item off" data-i="2"><i data-lucide="laptop"></i><span>LAPTOP-UJEGJK</span></button>
+      <button class="item off" data-i="3"><i data-lucide="laptop"></i><span>MacBook</span></button>
+      <div class="grow"></div>
+      <button class="side-add"><i data-lucide="plus"></i>添加设备</button>
+    </aside>
+
+    <div class="main">
+      <div class="tb">
+        <button class="tbtn" id="bSide" aria-label="显示或隐藏侧栏"><i data-lucide="panel-left"></i></button>
+        <div class="ttl">
+          <div class="a" id="tName">工位电脑</div>
+          <div class="b" id="tSub"><i></i><span>在线 · 局域网</span></div>
+        </div>
+        <div class="sp"></div>
+        <label class="search only-idle"><i data-lucide="search"></i><input placeholder="搜索设备" aria-label="搜索设备"></label>
+        <button class="tbtn only-live" id="bInfo" aria-label="连接信息"><i data-lucide="info"></i></button>
+      </div>
+
+      <div class="content">
+        <!-- 未连接 -->
+        <section class="view v-idle">
+          <div class="detail" id="detail">
+            <div class="hero">
+              <div class="dev-art" id="art"><div class="scr"><div></div></div><div class="neck"></div><div class="foot"></div><div class="base"></div></div>
+              <h1 id="dName">工位电脑</h1>
+              <div class="st"><i id="dDot"></i><span id="dSub">在线 · 局域网 · Windows 11</span></div>
+              <div class="acts">
+                <button class="btn" id="bCode">输入连接码…</button>
+                <button class="btn pri lg" id="bConnect">连接</button>
+              </div>
+              <div class="selfcode">
+                <div><div class="k">本机连接码</div><div class="v num">482 193</div></div>
+                <button class="btn" aria-label="拷贝连接码"><i data-lucide="copy"></i>拷贝</button>
+              </div>
+            </div>
+
+            <div class="gh">设备信息</div>
+            <div class="group">
+              <div class="row"><span class="l">分辨率</span><span class="v num" id="iRes">2560 × 1440</span></div>
+              <div class="row"><span class="l">上次连接</span><span class="v num" id="iLast">今天 07:40</span></div>
+              <div class="row"><span class="l">连接方式</span><span class="v" id="iVia">局域网直连</span></div>
+            </div>
+
+            <div class="opts">
+              <div class="gh">连接选项</div>
+              <div class="group">
+                <div class="row"><span class="l">画质</span><button class="popup" id="pQuality"><span>均衡</span><i data-lucide="chevrons-up-down"></i></button></div>
+                <div class="row"><span class="l">播放远程电脑的声音</span><button class="sw on" role="switch" aria-checked="true" aria-label="声音"></button></div>
+                <div class="row"><span class="l">同步剪贴板</span><button class="sw on" role="switch" aria-checked="true" aria-label="剪贴板"></button></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 连接中 -->
+        <section class="view v-connecting">
+          <div class="conn">
+            <div class="spin" id="spin"></div>
+            <div class="a" id="cTitle">正在连接「工位电脑」</div>
+            <div class="b" id="cStep">正在握手…</div>
+            <button class="btn" id="bCancel">取消</button>
+          </div>
+        </section>
+
+        <!-- 已连接 -->
+        <section class="view v-live">
+          <div class="stagebox">
+            <div class="screen">
+              <div class="wall"></div>
+              <div class="rwin term">
+                <div class="bar"><b>PowerShell</b></div>
+<pre><span class="p">PS E:\code\server-manga-log\leeconnect&gt;</span> cargo run --bin host
+<span class="dim">   Compiling leeconnect v0.1.0</span>
+<span class="ok">    Finished</span> `dev` profile in 4.21s
+<span class="dim">[host]</span> DXGI 2560×1440 · H.264
+<span class="dim">[host]</span> client connected ▸ 60 fps
+<span class="p">PS E:\code\server-manga-log\leeconnect&gt;</span> ▌</pre>
+              </div>
+              <div class="rwin expl">
+                <div class="bar">leeconnect</div>
+                <div class="bd">
+                  <div class="nav"><span>主文件夹</span><span>桌面</span><span>下载</span><span>文档</span><span>code</span></div>
+                  <div class="files">
+                    <div class="f"><i class="ic"></i>src</div>
+                    <div class="f"><i class="ic"></i>target</div>
+                    <div class="f"><i class="ic doc"></i>Cargo.toml</div>
+                    <div class="f"><i class="ic doc"></i>build.ps1</div>
+                    <div class="f"><i class="ic doc"></i>README.md</div>
+                  </div>
+                </div>
+              </div>
+              <div class="task"><i class="st"></i><i></i><i class="fo"></i><i class="tm"></i><i class="ed"></i><div class="clk num">22:05<br>2026/11/23</div></div>
+            </div>
+          </div>
+
+          <div class="hud" id="hud">
+            <button class="hb" data-tip="全屏" data-toggle><i data-lucide="maximize"></i></button>
+            <button class="hb" data-tip="同步剪贴板" id="hClip"><i data-lucide="clipboard"></i></button>
+            <button class="hb" data-tip="发送文件"><i data-lucide="folder-up"></i></button>
+            <button class="hb" data-tip="切换显示器"><i data-lucide="monitor"></i></button>
+            <button class="hb" data-tip="隐私屏" data-toggle><i data-lucide="eye-off"></i></button>
+            <span class="more-wrap">
+              <button class="hb" data-tip="更多" id="hMore"><i data-lucide="ellipsis"></i></button>
+              <div class="menu" id="menu">
+                <button class="mi"><i data-lucide="lock"></i>锁定远程电脑</button>
+                <button class="mi"><i data-lucide="keyboard"></i>发送 Ctrl+Alt+Del<span class="k">⌃⌥⌫</span></button>
+                <button class="mi"><i data-lucide="network"></i>端口映射…</button>
+                <div class="msep"></div>
+                <button class="mi" id="mCursor"><i data-lucide="mouse-pointer-2"></i>显示远程光标<span class="k ck"><i data-lucide="check"></i></span></button>
+                <button class="mi" disabled><i data-lucide="gamepad-2"></i>手柄<span class="k">未检测到</span></button>
+              </div>
+            </span>
+            <span class="hsep"></span>
+            <button class="hb pw" data-tip="断开" id="hPower"><i data-lucide="power"></i></button>
+          </div>
+        </section>
+      </div>
+
+      <!-- 连接信息 -->
+      <div class="pop" id="pop">
+        <div class="hd">连接质量<span class="q" id="pQ">良好</span></div>
+        <div class="big"><b class="num" id="pMs">18</b><span>ms</span></div>
+        <svg class="spark" viewBox="0 0 248 44" preserveAspectRatio="none" aria-label="最近 30 秒延迟">
+          <defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--page-accent)" stop-opacity=".22"/><stop offset="1" stop-color="var(--page-accent)" stop-opacity="0"/></linearGradient></defs>
+          <path id="sArea" fill="url(#sg)"/><path id="sLine" fill="none" stroke="var(--page-accent)" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+        </svg>
+        <div class="kv"><span class="k">分辨率</span><span class="num">2560 × 1440</span></div>
+        <div class="kv"><span class="k">帧率</span><span class="num">60 fps</span></div>
+        <div class="kv"><span class="k">编码</span><span>H.264 · 软件</span></div>
+        <div class="kv"><span class="k">带宽</span><span class="num" id="pBw">24.6 Mbit/s</span></div>
+        <div class="kv"><span class="k">时长</span><span class="num" id="pDur">00:00:00</span></div>
+      </div>
+
+      <!-- 通知 -->
+      <div class="toast" id="toast">
+        <span class="appicon"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"><rect x="2.5" y="4" width="12.5" height="9.5" rx="2" opacity=".6"/><rect x="9" y="10" width="12.5" height="9.5" rx="2" fill="rgba(255,255,255,.2)"/></svg></span>
+        <div class="tt"><div class="m">剪贴板已同步<span>现在</span></div><div class="s">128 个字符已发送到「工位电脑」</div></div>
+      </div>
+    </div>
+
+    <!-- Sheet：连接码 -->
+    <div class="scrim" id="sheetScrim">
+      <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="shT">
+        <h2 id="shT">输入连接码</h2>
+        <p>在对方电脑上打开 LeeConnect，输入窗口里显示的 6 位数字。</p>
+        <div class="code" id="code">
+          <input inputmode="numeric" maxlength="1" aria-label="第 1 位"><input inputmode="numeric" maxlength="1" aria-label="第 2 位"><input inputmode="numeric" maxlength="1" aria-label="第 3 位"><span class="g"></span><input inputmode="numeric" maxlength="1" aria-label="第 4 位"><input inputmode="numeric" maxlength="1" aria-label="第 5 位"><input inputmode="numeric" maxlength="1" aria-label="第 6 位">
+        </div>
+        <div class="ft">
+          <a class="link" href="#" onclick="return false">在哪里找到连接码？</a>
+          <button class="btn" id="shCancel">取消</button>
+          <button class="btn pri" id="shGo" disabled>连接</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Alert：断开 -->
+    <div class="scrim" id="alertScrim">
+      <div class="alert" role="alertdialog" aria-modal="true" aria-labelledby="alT">
+        <span class="appicon"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"><rect x="2.5" y="4" width="12.5" height="9.5" rx="2" opacity=".6"/><rect x="9" y="10" width="12.5" height="9.5" rx="2" fill="rgba(255,255,255,.2)"/></svg></span>
+        <h3 id="alT">断开与「工位电脑」的连接？</h3>
+        <p>正在进行的文件传输会中断。</p>
+        <div class="ft"><button class="btn" id="alCancel">取消</button><button class="btn red" id="alGo">断开</button></div>
+      </div>
+    </div>
+  </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  if (window.lucide) lucide.createIcons({attrs:{'stroke-width':1.6}});
+  var $=function(s){return document.querySelector(s)}, $$=function(s){return [].slice.call(document.querySelectorAll(s))};
+  var win=$('#win');
+
+  // 旋转指示器
+  var spin=$('#spin'); for(var k=0;k<12;k++){var i=document.createElement('i');i.style.transform='rotate('+(k*30)+'deg)';i.style.animationDelay=(-1+k/12)+'s';spin.appendChild(i);}
+
+  var devs=[
+    {name:'DESKTOP-M2SOF0N',kind:'',online:true,self:true,sub:'这台电脑 · Windows 11',res:'2560 × 1440',last:'—',via:'—'},
+    {name:'工位电脑',kind:'',online:true,sub:'在线 · 局域网 · Windows 11',res:'2560 × 1440',last:'今天 07:40',via:'局域网直连'},
+    {name:'LAPTOP-UJEGJK',kind:'laptop',online:false,sub:'离线 · 上次在线 11月21日 14:02',res:'1920 × 1080',last:'11月21日 14:02',via:'中继'},
+    {name:'MacBook',kind:'laptop',online:false,sub:'离线 · 上次在线 11月18日 21:15',res:'2880 × 1800',last:'11月18日 21:15',via:'局域网直连'}
+  ];
+  var cur=1, state='idle', timers=[], liveStart=0;
+
+  function pick(i){
+    cur=i; var d=devs[i];
+    $$('.item').forEach(function(b){b.classList.toggle('sel',+b.dataset.i===i)});
+    $('#dName').textContent=d.name; $('#dSub').textContent=d.sub;
+    $('#dDot').classList.toggle('off',!d.online);
+    $('#art').className='dev-art'+(d.kind?' '+d.kind:'')+(d.online?'':' off');
+    $('#iRes').textContent=d.res; $('#iLast').textContent=d.last; $('#iVia').textContent=d.via;
+    $('#detail').classList.toggle('self',!!d.self);
+    var bc=$('#bConnect'); bc.disabled=!d.online; bc.textContent=d.online?'连接':'设备离线';
+    titles();
+  }
+  function titles(){
+    var d=devs[cur], sub=$('#tSub');
+    $('#tName').textContent=d.name;
+    if(state==='live'){ sub.innerHTML='<i></i><span class="num" id="tMs">18 ms</span><span>· 2560 × 1440 · 60 fps</span>'; }
+    else if(state==='connecting'){ sub.innerHTML='<i style="background:var(--page-orange)"></i><span>正在连接…</span>'; }
+    else { sub.innerHTML='<i class="'+(d.online?'':'off')+'"></i><span>'+(d.self?'本机':d.online?'在线 · 局域网':'离线')+'</span>'; }
+    $('#cTitle').textContent='正在连接「'+d.name+'」';
+    $('#alT').textContent='断开与「'+d.name+'」的连接？';
+    $('.toast .s').textContent='128 个字符已发送到「'+d.name+'」';
+  }
+  function clear(){timers.forEach(clearTimeout);timers=[];}
+  function setState(s){
+    clear(); state=s; win.dataset.state=s;
+    win.classList.toggle('collapsed',s==='live');
+    $$('#dState button').forEach(function(b){b.classList.toggle('on',b.dataset.s===s)});
+    closeAll();
+    if(s==='connecting'){
+      var steps=['正在握手…','正在协商画质与编码…','正在接收画面…'];
+      $('#cStep').textContent=steps[0];
+      timers.push(setTimeout(function(){$('#cStep').textContent=steps[1]},800));
+      timers.push(setTimeout(function(){$('#cStep').textContent=steps[2]},1600));
+      timers.push(setTimeout(function(){setState('live')},2500));
+    }
+    if(s==='live'){ liveStart=Date.now(); }
+    if(s!=='live' && devs[cur].self){ /* keep */ }
+    titles();
+  }
+  function closeAll(){ $('#pop').classList.remove('open'); $('#bInfo').classList.remove('on'); $('#menu').classList.remove('open'); }
+
+  $$('.item').forEach(function(b){b.onclick=function(){ if(state==='live')return; pick(+b.dataset.i); }});
+  $('#bSide').onclick=function(){win.classList.toggle('collapsed')};
+  $('#bConnect').onclick=function(){ if(devs[cur].online) setState('connecting'); };
+  $('#bCancel').onclick=function(){setState('idle')};
+  $$('#dState button').forEach(function(b){b.onclick=function(){ if(devs[cur].self||!devs[cur].online) pick(1); setState(b.dataset.s); }});
+  $$('#dTheme button').forEach(function(b){b.onclick=function(){
+    document.documentElement.classList.toggle('dark',b.dataset.t==='dark');
+    $$('#dTheme button').forEach(function(x){x.classList.toggle('on',x===b)});
+  }});
+
+  // 开关 / 画质
+  $$('.sw').forEach(function(s){s.onclick=function(){var on=s.classList.toggle('on');s.setAttribute('aria-checked',on)}});
+  var q=['流畅','均衡','清晰'], qi=1; $('#pQuality').onclick=function(){qi=(qi+1)%3; this.querySelector('span').textContent=q[qi];};
+
+  // HUD
+  $$('.hb[data-toggle]').forEach(function(b){b.onclick=function(){b.classList.toggle('on')}});
+  $('#hMore').onclick=function(e){e.stopPropagation(); $('#menu').classList.toggle('open'); $('#pop').classList.remove('open'); $('#bInfo').classList.remove('on');};
+  $('#mCursor').onclick=function(){var c=this.querySelector('.ck'); c.style.visibility=c.style.visibility==='hidden'?'visible':'hidden';};
+  $$('.mi').forEach(function(m){ m.addEventListener('click',function(){ if(!m.disabled) $('#menu').classList.remove('open'); }); });
+  $('#bInfo').onclick=function(e){e.stopPropagation(); var o=$('#pop').classList.toggle('open'); this.classList.toggle('on',o); $('#menu').classList.remove('open');};
+  document.addEventListener('click',function(e){ if(!e.target.closest('#pop,#bInfo,#menu,#hMore')) closeAll(); });
+
+  var tt; $('#hClip').onclick=function(){ var t=$('#toast'); t.classList.add('show'); clearTimeout(tt); tt=setTimeout(function(){t.classList.remove('show')},2600); };
+
+  // 断开
+  $('#hPower').onclick=function(){ closeAll(); $('#alertScrim').classList.add('open'); $('#alGo').focus(); };
+  $('#alCancel').onclick=function(){ $('#alertScrim').classList.remove('open'); };
+  $('#alGo').onclick=function(){ $('#alertScrim').classList.remove('open'); setState('idle'); };
+
+  // 连接码
+  var ins=$$('#code input');
+  function codeOk(){ $('#shGo').disabled=!ins.every(function(x){return /^\d$/.test(x.value)}); }
+  ins.forEach(function(inp,idx){
+    inp.addEventListener('input',function(){ inp.value=inp.value.replace(/\D/g,'').slice(-1); if(inp.value&&ins[idx+1]) ins[idx+1].focus(); codeOk(); });
+    inp.addEventListener('keydown',function(e){ if(e.key==='Backspace'&&!inp.value&&ins[idx-1]){ ins[idx-1].focus(); ins[idx-1].value=''; codeOk(); } });
+    inp.addEventListener('paste',function(e){ var d=(e.clipboardData.getData('text')||'').replace(/\D/g,'').slice(0,6); if(!d)return; e.preventDefault(); ins.forEach(function(x,j){x.value=d[j]||''}); (ins[Math.min(d.length,5)]).focus(); codeOk(); });
+  });
+  $('#bCode').onclick=function(){ $('#sheetScrim').classList.add('open'); ins.forEach(function(x){x.value=''}); codeOk(); ins[0].focus(); };
+  $('#shCancel').onclick=function(){ $('#sheetScrim').classList.remove('open'); };
+  $('#shGo').onclick=function(){ $('#sheetScrim').classList.remove('open'); pick(1); setState('connecting'); };
+  document.addEventListener('keydown',function(e){ if(e.key==='Escape'){ $('#sheetScrim').classList.remove('open'); $('#alertScrim').classList.remove('open'); closeAll(); } });
+
+  // 实时数据（原型用）
+  var hist=[]; for(var h=0;h<30;h++) hist.push(16+Math.random()*5);
+  function spark(){
+    var W=248,H=44,min=10,max=30, pts=hist.map(function(v,i){return [i*(W/(hist.length-1)), H-(v-min)/(max-min)*H]});
+    var d=pts.map(function(p,i){return (i?'L':'M')+p[0].toFixed(1)+' '+p[1].toFixed(1)}).join(' ');
+    $('#sLine').setAttribute('d',d); $('#sArea').setAttribute('d',d+' L'+W+' '+H+' L0 '+H+' Z');
+  }
+  spark();
+  setInterval(function(){
+    if(state!=='live')return;
+    var ms=Math.round(15+Math.random()*6); hist.push(ms); hist.shift(); spark();
+    $('#pMs').textContent=ms; var t=$('#tMs'); if(t) t.textContent=ms+' ms';
+    $('#pBw').textContent=(22+Math.random()*5).toFixed(1)+' Mbit/s';
+    var s=Math.floor((Date.now()-liveStart)/1000)+767, p=function(n){return (n<10?'0':'')+n};
+    $('#pDur').textContent=p(Math.floor(s/3600))+':'+p(Math.floor(s/60)%60)+':'+p(s%60);
+  },1000);
+
+  pick(1);
+})();
+</script>
+</body>
+</html>

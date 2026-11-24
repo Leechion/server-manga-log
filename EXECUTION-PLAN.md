@@ -9,15 +9,21 @@
 ## P0 — 让软件"成形可用"（最高优先）
 
 ### 1. 实时渲染上屏 ✅（2026-11-23 完成并实测）
-- **落地**：`leeconnect/src/bin/gui.rs`（egui/eframe 0.37，glow 后端）
-- **实测**：host+gui 双进程，gui 窗口中央实时显示 host 真实桌面（截图 `leeconnect/target/gui-window.png`）；
-  左侧设备导航（我的设备/本机/工位电脑/离线）中文正常（CJK 字体已加载，`gui-cjk.png`）；
-  顶栏连接状态绿点 + caps 显示；底部工具栏（断开/全屏/剪贴板/文件/端口映射/手柄/锁屏/隐私屏）；
-  鼠标悬停/点击 → 绝对坐标+左键事件回传 host（MoveAbs/Button 已实现）
+- **落地**：`leeconnect/src/bin/gui/`（模块化：`main.rs`, `app.rs`, `theme.rs`, `widgets.rs`, `views/`，egui/eframe 0.37，glow 后端）
+- **实测**：host+gui 双进程，gui 窗口中央实时显示 host 真实桌面；
+  按 `docs/UI-REDESIGN-execution-plan.md` 完整重构为 BoardUI 规范 v2：
+  - M0：单文件 `gui.rs` 拆分为 `src/bin/gui/` 模块架构；
+  - M1：浅色/深色双套 Token 调色板，Inter Medium/Regular 字体与 Windows CJK 回退；
+  - M2：自绘 24x24 纯几何矢量图标库与复用组件（tray, card, status_pill, chip, btn, button_group, segmented, toggle, device_row, step_row）；
+  - M3：布局重排（设备顶栏、60px/236px 浮动圆角侧栏、三组底栏工具箱、可收起指标右栏、中央托盘及等比映射）；
+  - M4：Stage/Status 状态机，三阶段耗时连接进度、失败错误弹窗、断开二次确认与 6 位配对码；
+  - M5：会话设置面板、文件传输窗口、Toast 通知堆叠与延迟分解；
+  - M6：浅色/深色与 6 种强调色切换，`%APPDATA%\LeeConnect\ui.json` 自动持久化；
+  - M7：自动化视觉验收套件（`--test-screens`, `--gallery`），9 个高保真画面截图已固化至 `leeconnect/target/ui-v2/`。
 - **待深化**（不影响"客户端已成形"结论）：工具栏按钮动作接线（属 #2/#6/#7 范围）、键盘捕获（当前仅鼠标）
 - **依赖坑记录**：cargo schannel+HTTP2 多路复用握手失败 → `CARGO_HTTP_MULTIPLEXING=false`（已固化进 build.ps1）；
-  egui 0.37 API 与旧版差异大（`App::ui`、`Panel::top/left`、`allocate_exact_size` 返回 `(Rect,Response)`、
-  `Image::new(&TextureHandle)`、`TextureHandle::set`、字体 `families` 追加回退）——均按 crate 源码核实
+  egui 0.37 API 与旧版差异大（`App::ui`、`Panel::exact_size`、`allocate_exact_size` 返回 `(Rect,Response)`、
+  `Context::viewport_rect()`、`Context::request_screenshot`、字体 `families` 追加回退）——均按 crate 源码核实
 - **运行**：`.\build.ps1 run --bin gui`（host 需先启动）
 
 ### 2. 音频链路

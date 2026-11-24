@@ -1,0 +1,1261 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="UTF-8"><style id="qw-theme">:root {
+  --color-bg: #faf9fc !important;
+  --color-text: #131920 !important;
+  --chat-column-base: 720px !important;
+  --chat-column-max: 720px !important;
+  --color-navbar-bg: #f9f9fb !important;
+  --color-navbar-fg: #131920 !important;
+  --color-navbar-divider: #0000001f !important;
+  --color-leftnav-bg: #fff !important;
+  --color-bg-chat-view: #f9f9fb !important;
+  --color-bg-secondary: #fff !important;
+  --color-bg-tertiary: #f9fafb !important;
+  --color-bg-hover: #f3f4f6 !important;
+  --color-surface: #f9fafb !important;
+  --color-surface-hover: #f3f4f6 !important;
+  --color-surface-active: #e5e7eb !important;
+  --color-border: #0000001f !important;
+  --color-border-light: #0000000f !important;
+  --color-border-strong: #d1d5db !important;
+  --background-toggle-off-default: #fff0 !important;
+  --color-primary: #4200db !important;
+  --color-primary-dark: #35009e !important;
+  --color-primary-light: #8575ff !important;
+  --color-primary-bg: #e8e6ff !important;
+  --color-primary-hover-border: #35009e !important;
+  --color-nav-icon-active: #4200db !important;
+  --color-nav-hover-border: #4200db !important;
+  --color-primary-alpha-3: color-mix(in srgb, #4200db 3%, transparent) !important;
+  --color-primary-alpha-5: color-mix(in srgb, #4200db 5%, transparent) !important;
+  --color-primary-alpha-8: color-mix(in srgb, #4200db 8%, transparent) !important;
+  --color-primary-alpha-12: color-mix(in srgb, #4200db 12%, transparent) !important;
+  --color-primary-alpha-15: color-mix(in srgb, #4200db 15%, transparent) !important;
+  --color-primary-alpha-20: color-mix(in srgb, #4200db 20%, transparent) !important;
+  --color-primary-alpha-25: color-mix(in srgb, #4200db 25%, transparent) !important;
+  --color-primary-alpha-30: color-mix(in srgb, #4200db 30%, transparent) !important;
+  --color-primary-alpha-40: color-mix(in srgb, #4200db 40%, transparent) !important;
+  --color-primary-alpha-50: color-mix(in srgb, #4200db 50%, transparent) !important;
+  --color-primary-alpha-60: color-mix(in srgb, #4200db 60%, transparent) !important;
+  --color-primary-subtle: color-mix(in srgb, #4200db 12%, transparent) !important;
+  --color-primary-border: color-mix(in srgb, #4200db 30%, transparent) !important;
+  --color-focus-ring: #4200db !important;
+  --color-sidebar-hover: color-mix(in srgb, #4200db 12%, transparent) !important;
+  --color-sidebar-hover-solid: color-mix(in srgb, #4200db 12%, #faf9fc) !important;
+  --block-selection-outline-offset: 2px !important;
+  --color-accent: #4200db !important;
+  --color-accent-foreground: #4200db !important;
+  --color-accent-dark: #35009e !important;
+  --color-accent-light: #e8e6ff !important;
+  --color-accent-inverse: #fff !important;
+  --color-link: #4200db !important;
+  --color-brand-ai-gradient-start: #6842ff !important;
+  --color-brand-ai-gradient-mid: #d600ba !important;
+  --color-brand-ai-gradient-end: #ff4b14 !important;
+  --color-brand-kiro: #9147ff !important;
+  --color-primary-gradient-end: #e8e6ff !important;
+  --color-primary-bg-solid: #e8e6ff !important;
+  --color-user-bubble: #f3f3f7 !important;
+  --color-user-bubble-text: #131920 !important;
+  --color-text-secondary: #5e5e5e !important;
+  --color-text-tertiary: #656871 !important;
+  --color-text-muted: #656871 !important;
+  --color-text-on-primary: #fff !important;
+  --color-success: #00802f !important;
+  --color-success-dark: #00471e !important;
+  --color-success-light: #d9ffd6 !important;
+  --color-success-hover: #005c26 !important;
+  --color-success-bg: #e6f5eb !important;
+  --color-success-border: #b3d9bf !important;
+  --color-success-foreground: #00802f !important;
+  --color-success-dark-foreground: #00471e !important;
+  --color-success-text: #00471e !important;
+  --color-error: #db0000 !important;
+  --color-error-dark: #700000 !important;
+  --color-error-light: #ffe0e0 !important;
+  --color-error-hover: #ffe0e0 !important;
+  --color-error-bg: #fceaea !important;
+  --color-error-border: #f2cccc !important;
+  --color-error-active-border: #db0000 !important;
+  --color-error-foreground: #db0000 !important;
+  --color-error-dark-foreground: #700000 !important;
+  --color-error-inverse: #fff !important;
+  --color-error-text: #700000 !important;
+  --color-warning: #f2b100 !important;
+  --color-warning-dark: #573a00 !important;
+  --color-warning-light: #fffbbd !important;
+  --color-warning-hover: #db9200 !important;
+  --color-warning-bg: #fef7e6 !important;
+  --color-warning-border: #f9dfa3 !important;
+  --color-warning-foreground: #f2b100 !important;
+  --color-warning-dark-foreground: #573a00 !important;
+  --color-warning-inverse: #573a00 !important;
+  --color-surface-warning: #fffbbd !important;
+  --color-text-warning: #573a00 !important;
+  --color-info: #006ce0 !important;
+  --color-info-dark: #002a66 !important;
+  --color-info-light: #d1f1ff !important;
+  --color-info-hover: #003b8f !important;
+  --color-info-bg: #ebf3fc !important;
+  --color-info-border: #b3d1f0 !important;
+  --color-info-foreground: #006ce0 !important;
+  --color-info-dark-foreground: #002a66 !important;
+  --color-info-inverse: #fff !important;
+  --color-overlay: #00000080 !important;
+  --color-shadow: #00000014 !important;
+  --color-hover: #0000000d !important;
+  --color-tooltip-bg: #000000d9 !important;
+  --color-tooltip-text: #fff !important;
+  --color-voice-purple: #8575ff !important;
+  --color-voice-purple-dark: #4200db !important;
+  --color-voice-purple-light: #8575ff !important;
+  --color-voice-red: #db0000 !important;
+  --color-voice-red-dark: #700000 !important;
+  --color-voice-amber: #f2b100 !important;
+  --color-voice-purple-glow: #4200db66 !important;
+  --color-voice-red-glow: #db000066 !important;
+  --font-sans: "Amazon Ember", "Helvetica Neue", "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
+  --font-mono: "SF Mono", "Monaco", "Menlo", "Consolas", monospace !important;
+  --text-2xs: .5625rem !important;
+  --text-xs: .625rem !important;
+  --text-sm: .6875rem !important;
+  --text-base: .75rem !important;
+  --text-md: .8125rem !important;
+  --text-lg: .875rem !important;
+  --text-xl: 1rem !important;
+  --text-2xl: 1.125rem !important;
+  --text-3xl: 1.25rem !important;
+  --text-4xl: 1.5rem !important;
+  --text-5xl: 2rem !important;
+  --spacing-1: calc(.25rem * 1) !important;
+  --spacing-1-5: calc(.25rem * 1.5) !important;
+  --spacing-2: calc(.25rem * 2) !important;
+  --spacing-3: calc(.25rem * 3) !important;
+  --spacing-4: calc(.25rem * 4) !important;
+  --spacing-5: calc(.25rem * 5) !important;
+  --spacing-6: calc(.25rem * 6) !important;
+  --spacing-7: calc(.25rem * 7) !important;
+  --spacing-8: calc(.25rem * 8) !important;
+  --spacing-9: calc(.25rem * 9) !important;
+  --spacing-10: calc(.25rem * 10) !important;
+  --border-radius-rounded-lg: 8px !important;
+  --radius-sm: 6px !important;
+  --radius-md: 10px !important;
+  --radius-card: 12px !important;
+  --radius-lg: 16px !important;
+  --radius-pill: 8px !important;
+  --shadow-sm: 0 1px 2px #0000000d !important;
+  --shadow-md: 0 4px 12px #00000014 !important;
+  --shadow-lg: 0 4px 16px 4px #00000029, 0 2px 6px 1px #00000029 !important;
+  --color-success-bg-solid: #d9ffd6 !important;
+  --color-error-bg-solid: #ffe0e0 !important;
+  --color-error-border-solid: #ffe0e0 !important;
+  --color-warning-bg-solid: #fffbbd !important;
+  --color-warning-text: #573a00 !important;
+  --color-info-bg-solid: #d1f1ff !important;
+  --color-info-bg-solid-alt: #d1f1ff !important;
+  --color-info-text: #002a66 !important;
+  --color-info-text-alt: #002a66 !important;
+  --color-emerald: #10b981 !important;
+  --color-teal: #4ecdc4 !important;
+  --color-code-bg: #f3f3f7 !important;
+  --color-code-header-bg: #f1f3f5 !important;
+  --color-code-text: #24292e !important;
+  --color-code-border: #e1e4e8 !important;
+  --color-code-muted: #6a737d !important;
+  --color-inline-code-bg: #f3f3f7 !important;
+  --color-inline-code-text: #24292e !important;
+  --color-inline-code-border: #e1e4e8 !important;
+  --color-scrollbar-thumb: #d1d5db !important;
+  --color-scrollbar-track: transparent !important;
+  --qs-data-cat-01: #4338ca !important;
+  --qs-data-cat-02: #d97706 !important;
+  --qs-data-cat-03: #0891b2 !important;
+  --qs-data-cat-04: #8b5cf6 !important;
+  --qs-data-cat-05: #15803d !important;
+  --qs-data-cat-06: #0c4a6e !important;
+  --qs-data-cat-07: #d946ef !important;
+  --qs-data-cat-08: #65a30d !important;
+  --qs-data-cat-09: #1d4ed8 !important;
+  --qs-data-cat-10: #831843 !important;
+  --qs-data-cat-11: #c2410c !important;
+  --qs-data-cat-12: #115e59 !important;
+  --qs-data-cat-other: #737373 !important;
+  --qs-content: #fff !important;
+  --qs-main: #f9f9fb !important;
+  --qs-primary-foreground: #131920 !important;
+  --qs-secondary-foreground: #656871 !important;
+  --qs-tertiary-foreground: #656871 !important;
+  --qs-placeholder-foreground: #656871 !important;
+  --qs-divider: #dedee3 !important;
+  --qs-default-border: #8c8c94 !important;
+  --qs-neutral-soft: #b4b4bb !important;
+  --qs-neutral-gray-50: #f9fafb !important;
+  --qs-tertiary-background: #f9fafb !important;
+  --qs-action-hover: #f3f3f7 !important;
+  --qs-primary-default: #4200db !important;
+  --qs-primary-dark: #35009e !important;
+  --qs-primary-medium: #8575ff !important;
+  --qs-primary-light: #e8e6ff !important;
+  --qs-primary-inverse: #fff !important;
+  --qs-success-default: #00802f !important;
+  --qs-success-dark: #00471e !important;
+  --qs-success-light: #d9ffd6 !important;
+  --qs-error-default: #db0000 !important;
+  --qs-error-dark: #700000 !important;
+  --qs-warning-default: #f2b100 !important;
+  --qs-warning-dark: #573a00 !important;
+  --qs-warning-light: #fffbbd !important;
+  --qs-info-default: #006ce0 !important;
+  --qs-info-dark: #002a66 !important;
+  --qs-font-sans: "Amazon Ember", "Helvetica Neue", "Segoe UI", Helvetica, Arial, sans-serif !important;
+  --safe-top: 0px !important;
+  --safe-bottom: 0px !important;
+  --safe-left: 0px !important;
+  --safe-right: 0px !important;
+  --qs-action-active: #e8e6ff !important;
+  --qs-action-active-hover: #b2a8ff !important;
+  --qs-action-disabled: #f3f3f7 !important;
+  --qs-active-border: #4200db !important;
+  --qs-application-navbar: #4200db !important;
+  --qs-application-navbar-dark: #35009e !important;
+  --qs-application-navbar-foreground: #fff !important;
+  --qs-application-navbar-light: #e8e6ff !important;
+  --qs-automation-dark: #660052 !important;
+  --qs-automation-default: #d600ba !important;
+  --qs-automation-light: #ffe0fb !important;
+  --qs-automation-medium: #b3008f !important;
+  --qs-automation-soft: #ff94f1 !important;
+  --qs-avatar-blue-bg: #d1f1ff !important;
+  --qs-avatar-blue-fg: #002a66 !important;
+  --qs-avatar-fuchsia-bg: #fce6ff !important;
+  --qs-avatar-fuchsia-fg: #590066 !important;
+  --qs-avatar-green-bg: #d9ffd6 !important;
+  --qs-avatar-green-fg: #00471e !important;
+  --qs-avatar-neutral-bg: #dedee3 !important;
+  --qs-avatar-neutral-fg: #131920 !important;
+  --qs-avatar-orange-bg: #ffe0d6 !important;
+  --qs-avatar-orange-fg: #661800 !important;
+  --qs-avatar-pink-bg: #ffe0fb !important;
+  --qs-avatar-pink-fg: #660052 !important;
+  --qs-avatar-primary-bg: #e8e6ff !important;
+  --qs-avatar-primary-fg: #35009e !important;
+  --qs-avatar-red-bg: #ffe0e0 !important;
+  --qs-avatar-red-fg: #700000 !important;
+  --qs-avatar-violet-bg: #f2e5ff !important;
+  --qs-avatar-violet-fg: #45008a !important;
+  --qs-avatar-yellow-bg: #fffbbd !important;
+  --qs-avatar-yellow-fg: #573a00 !important;
+  --qs-blue-100: #e2ebff !important;
+  --qs-blue-1000: #060d27 !important;
+  --qs-blue-200: #c2d5ff !important;
+  --qs-blue-300: #9fbdff !important;
+  --qs-blue-400: #7ea0fc !important;
+  --qs-blue-50: #fafbff !important;
+  --qs-blue-500: #517df6 !important;
+  --qs-blue-600: #2d5fe8 !important;
+  --qs-blue-700: #1d3cb9 !important;
+  --qs-blue-800: #162c85 !important;
+  --qs-blue-900: #102165 !important;
+  --qs-blue-950: #0b1746 !important;
+  --qs-brand: #fff !important;
+  --qs-brand-foreground: #131920 !important;
+  --qs-brand-navbar: #131920 !important;
+  --qs-brand-navbar-dark: #000 !important;
+  --qs-brand-navbar-foreground: #fff !important;
+  --qs-brand-navbar-light: #dedee3 !important;
+  --qs-coachmark: #006ce0 !important;
+  --qs-connection-dark: #661800 !important;
+  --qs-connection-default: #db3300 !important;
+  --qs-connection-light: #ffe0d6 !important;
+  --qs-connection-soft: #ff997a !important;
+  --qs-content-inverse: #333843 !important;
+  --qs-content-inverse-active: #131920 !important;
+  --qs-contrast-foreground: #131920 !important;
+  --qs-control-selected-bg: #4200db !important;
+  --qs-control-selected-hover-bg: #35009e !important;
+  --qs-darkpurple1-100: #eee1ef !important;
+  --qs-darkpurple1-1000: #130b14 !important;
+  --qs-darkpurple1-200: #dcc0dd !important;
+  --qs-darkpurple1-300: #c99ecc !important;
+  --qs-darkpurple1-400: #b57ab8 !important;
+  --qs-darkpurple1-50: #f8f2f8 !important;
+  --qs-darkpurple1-500: #97529b !important;
+  --qs-darkpurple1-600: #754078 !important;
+  --qs-darkpurple1-700: #542e57 !important;
+  --qs-darkpurple1-800: #472749 !important;
+  --qs-darkpurple1-900: #341c35 !important;
+  --qs-darkpurple1-950: #241325 !important;
+  --qs-darkpurple2-100: #f1e3fc !important;
+  --qs-darkpurple2-1000: #1b042f !important;
+  --qs-darkpurple2-200: #e7d0fb !important;
+  --qs-darkpurple2-300: #d6b0f8 !important;
+  --qs-darkpurple2-400: #be81f3 !important;
+  --qs-darkpurple2-50: #f8f1fe !important;
+  --qs-darkpurple2-500: #a652ef !important;
+  --qs-darkpurple2-600: #8e24eb !important;
+  --qs-darkpurple2-700: #7413c9 !important;
+  --qs-darkpurple2-800: #580e98 !important;
+  --qs-darkpurple2-900: #36095d !important;
+  --qs-darkpurple2-950: #260642 !important;
+  --qs-data-categorical-01: #4338ca !important;
+  --qs-data-categorical-02: #d97706 !important;
+  --qs-data-categorical-03: #0891b2 !important;
+  --qs-data-categorical-04: #8b5cf6 !important;
+  --qs-data-categorical-05: #15803d !important;
+  --qs-data-categorical-06: #0c4a6e !important;
+  --qs-data-categorical-07: #d946ef !important;
+  --qs-data-categorical-08: #65a30d !important;
+  --qs-data-categorical-09: #1d4ed8 !important;
+  --qs-data-categorical-10: #831843 !important;
+  --qs-data-categorical-11: #c2410c !important;
+  --qs-data-categorical-12: #115e59 !important;
+  --qs-data-categorical-other: #737373 !important;
+  --qs-data-divergent-negative: #ea580c !important;
+  --qs-data-divergent-positive: #4f46e5 !important;
+  --qs-data-divergent-red-green-negative: #dc2626 !important;
+  --qs-data-divergent-red-green-positive: #16a34a !important;
+  --qs-data-missing: #d4d4d4 !important;
+  --qs-data-sentiment-neutral: #737373 !important;
+  --qs-data-sentiment-warning: #9e6900 !important;
+  --qs-data-sequential-duochromatic-high: #1e1b4b !important;
+  --qs-data-sequential-duochromatic-low: #8b5cf6 !important;
+  --qs-data-sequential-monochromatic-high: #4f46e5 !important;
+  --qs-default-badge: #b4b4bb !important;
+  --qs-default-badge-dot: #656871 !important;
+  --qs-dimension: #4200db !important;
+  --qs-dimension-experimental: #4200db !important;
+  --qs-dimension-experimental-foreground: #4200db !important;
+  --qs-dimension-foreground: #fff !important;
+  --qs-disabled: #8c8c94 !important;
+  --qs-disabled-border: #dedee3 !important;
+  --qs-disabled-foreground: #b4b4bb !important;
+  --qs-divider-light: #f3f3f7 !important;
+  --qs-error-active-border: #db0000 !important;
+  --qs-error-border: #ffe0e0 !important;
+  --qs-error-foreground: #db0000 !important;
+  --qs-error-inverse: #fff !important;
+  --qs-error-light: #ffe0e0 !important;
+  --qs-error-medium: #900 !important;
+  --qs-error-soft: #ff9e9e !important;
+  --qs-focus-offset: 1px !important;
+  --qs-font-base-letter-spacing: .15px !important;
+  --qs-font-display: "Amazon Ember", "Helvetica Neue", "Segoe UI", Helvetica, Arial, sans-serif !important;
+  --qs-font-family: "Amazon Ember", "Helvetica Neue", "Segoe UI", Helvetica, Arial, sans-serif !important;
+  --qs-gradient-automation-light-stop: #ffe0fb !important;
+  --qs-gradient-automation-medium-stop: #b3008f !important;
+  --qs-gradient-automation-stop: #d600ba !important;
+  --qs-gradient-connection-light-stop: #ffe0d6 !important;
+  --qs-gradient-connection-stop: #db3300 !important;
+  --qs-gradient-insight-light-stop: #fce6ff !important;
+  --qs-gradient-insight-stop: #a000b8 !important;
+  --qs-gradient-visualization-light-stop: #f2e5ff !important;
+  --qs-gradient-visualization-stop: #7300e5 !important;
+  --qs-green-100: #ccffd8 !important;
+  --qs-green-1000: #001409 !important;
+  --qs-green-200: #a9efba !important;
+  --qs-green-300: #84d39a !important;
+  --qs-green-400: #71c68c !important;
+  --qs-green-50: #f0fff3 !important;
+  --qs-green-500: #5bbe7a !important;
+  --qs-green-600: #3c955a !important;
+  --qs-green-700: #227340 !important;
+  --qs-green-800: #00441f !important;
+  --qs-green-900: #003317 !important;
+  --qs-green-950: #002410 !important;
+  --qs-grid-gap: 16px !important;
+  --qs-grid-gap-xl: 24px !important;
+  --qs-hero-banner-button-hover: color-mix(in srgb, #fff, transparent 60%) !important;
+  --qs-hover-border: #333843 !important;
+  --qs-info-inverse: #fff !important;
+  --qs-info-light: #d1f1ff !important;
+  --qs-info-medium: #003b8f !important;
+  --qs-info-soft: #75cfff !important;
+  --qs-insight-dark: #590066 !important;
+  --qs-insight-default: #a000b8 !important;
+  --qs-insight-light: #fce6ff !important;
+  --qs-insight-soft: #f299ff !important;
+  --qs-main-foreground: #131920 !important;
+  --qs-main-secondary-foreground: #656871 !important;
+  --qs-measure: #00802f !important;
+  --qs-measure-experimental: #f2b100 !important;
+  --qs-measure-experimental-foreground: #f2b100 !important;
+  --qs-measure-foreground: #fff !important;
+  --qs-neutral-0: #fff !important;
+  --qs-neutral-100: #f5f3ef !important;
+  --qs-neutral-1000: #0b0a0a !important;
+  --qs-neutral-200: #ece9e4 !important;
+  --qs-neutral-300: #e2dfda !important;
+  --qs-neutral-400: #cdc9c1 !important;
+  --qs-neutral-50: #faf9f7 !important;
+  --qs-neutral-500: #adaaa3 !important;
+  --qs-neutral-600: #94918b !important;
+  --qs-neutral-700: #7d7a73 !important;
+  --qs-neutral-800: #5e5b56 !important;
+  --qs-neutral-900: #302f2c !important;
+  --qs-neutral-950: #151310 !important;
+  --qs-neutral-black: #000 !important;
+  --qs-neutral-dark: #333843 !important;
+  --qs-neutral-deep: #656871 !important;
+  --qs-neutral-default: #dedee3 !important;
+  --qs-neutral-light: #f3f3f7 !important;
+  --qs-neutral-lightest: #f9f9fb !important;
+  --qs-neutral-medium: #8c8c94 !important;
+  --qs-neutral-strong: #131920 !important;
+  --qs-neutral-white: #fff !important;
+  --qs-overlay: color-mix(in srgb, #131920, transparent 50%) !important;
+  --qs-popover-border: transparent !important;
+  --qs-primary-inverse-foreground: #fff !important;
+  --qs-primary-soft: #b2a8ff !important;
+  --qs-progress-active: #4200db !important;
+  --qs-red-100: #ffe4e1 !important;
+  --qs-red-1000: #240004 !important;
+  --qs-red-200: #ffc7c2 !important;
+  --qs-red-300: #ffa099 !important;
+  --qs-red-400: #eb6560 !important;
+  --qs-red-50: #fff6f5 !important;
+  --qs-red-500: #c33c38 !important;
+  --qs-red-600: #aa2b2b !important;
+  --qs-red-700: #8a0f0f !important;
+  --qs-red-800: #6e000d !important;
+  --qs-red-900: #57000a !important;
+  --qs-red-950: #3d0007 !important;
+  --qs-secondary: #dedee3 !important;
+  --qs-secondary-dark: #b4b4bb !important;
+  --qs-secondary-light: #f3f3f7 !important;
+  --qs-shadow: #00000029 !important;
+  --qs-shadow-lg: 0 4px 16px 4px #00000029, 0 2px 6px 1px #00000029 !important;
+  --qs-shadow-md: 0 0 2px 0 #00000029, 0 2px 8px 1px #00000029 !important;
+  --qs-shadow-pin-left: inset -4px 0 4px -4px #00000029 !important;
+  --qs-shadow-pin-right: inset 4px 0 4px -4px #00000029 !important;
+  --qs-shadow-sm: 0 0 2px 0 #00000029, 0 0 4px 0 #00000029 !important;
+  --qs-shadow-xl: 0 4px 8px 2px #00000029, 0 6px 20px 4px #00000029 !important;
+  --qs-spice: #ff9800 !important;
+  --qs-success-inverse: #fff !important;
+  --qs-success-medium: #005c26 !important;
+  --qs-success-soft: #aeffa8 !important;
+  --qs-tag-default: #dedee3 !important;
+  --qs-tag-soft-border: #b4b4bb !important;
+  --qs-toggle-tile-lg: calc(.25rem * 15) !important;
+  --qs-toggle-tile-md: calc(.25rem * 12) !important;
+  --qs-toggle-tile-sm: calc(.25rem * 8) !important;
+  --qs-transparent: transparent !important;
+  --qs-visualization-dark: #45008a !important;
+  --qs-visualization-default: #7300e5 !important;
+  --qs-visualization-light: #f2e5ff !important;
+  --qs-visualization-soft: #d4a8ff !important;
+  --qs-warning-experimental: #f2b100 !important;
+  --qs-warning-experimental-light: #fffbbd !important;
+  --qs-warning-experimental-light-foreground: #fffbbd !important;
+  --qs-warning-inverse: #573a00 !important;
+  --qs-warning-medium: #db9200 !important;
+  --qs-warning-soft: #ffed4d !important;
+  --qs-width-modal-lg: 1136px !important;
+  --qs-width-modal-md: 600px !important;
+  --qs-width-modal-sm: 384px !important;
+  --qs-yellow-100: #fff5cf !important;
+  --qs-yellow-1000: #1f1100 !important;
+  --qs-yellow-200: #ffe79e !important;
+  --qs-yellow-300: #fbd86f !important;
+  --qs-yellow-400: #facb3d !important;
+  --qs-yellow-50: #fffcf0 !important;
+  --qs-yellow-500: #e2ac36 !important;
+  --qs-yellow-600: #ca8d2b !important;
+  --qs-yellow-700: #9d672f !important;
+  --qs-yellow-800: #7a4c19 !important;
+  --qs-yellow-900: #522e00 !important;
+  --qs-yellow-950: #381f00 !important;
+  --qs-duration-reorder: .125s !important;
+  --qs-ease-reorder: ease-in-out !important;
+  --z-subtask-modal: 10000 !important;
+  --z-above-subtask-modal: 10001 !important;
+}</style>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>远程桌面客户端 · 设计规范 v2（BoardUI 风格）</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=Noto+Sans+SC:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+/* ── Tokens · 浅色（默认，对应 BoardUI neutral 体系） ── */
+:root,.t-light{
+  --page-bg:#FFFFFF; --page-tray:#F7F7F7; --page-tray-2:#EBEBEB; --page-card:#FFFFFF;
+  --page-border:#EBEBEB; --page-border-strong:#D4D4D4; --page-side-border:#FFFFFF;
+  --page-text:#0A0A0A; --page-text-2:#737373; --page-text-3:#A3A3A3;
+  --page-ok-bg:#ECFCCB; --page-ok:#3F6212; --page-warn-bg:#FEF9C3; --page-warn:#854D0E;
+  --page-err-bg:#FFE4E6; --page-err:#9F1239; --page-danger:#A9101D;
+  --page-sh-card:0 1px 1px rgba(0,0,0,.05);
+  --page-sh-btn:0 1px 2px rgba(0,0,0,.05);
+  --page-sh-side:0 1px 0 rgba(0,0,0,.02),0 1px 12px rgba(0,0,0,.06),0 0 1px rgba(0,0,0,.32);
+  --page-sh-pop:0 16px 40px rgba(0,0,0,.10),0 0 1px rgba(0,0,0,.28);
+  --page-accent-soft:color-mix(in srgb,var(--page-accent) 11%,transparent);
+  --page-accent-text:var(--page-accent-deep);
+  color-scheme:light;
+}
+:root{--page-accent:#2673FE; --page-accent-deep:#144BE9;
+  --page-sans:'Inter','Noto Sans SC','PingFang SC','Microsoft YaHei',system-ui,sans-serif;
+  --page-mono:'JetBrains Mono','Cascadia Mono',Consolas,monospace;}
+/* ── Tokens · 深色 ── */
+html.dark,.t-dark{
+  --page-bg:#121212; --page-tray:#171717; --page-tray-2:#262626; --page-card:#1F1F1F;
+  --page-border:#2A2A2A; --page-border-strong:#404040; --page-side-border:#262729;
+  --page-text:#FAFAFA; --page-text-2:#8F8F8F; --page-text-3:#5C5C5C;
+  --page-ok-bg:rgba(54,83,20,.45); --page-ok:#A3E635; --page-warn-bg:rgba(113,63,18,.45); --page-warn:#FACC15;
+  --page-err-bg:rgba(136,19,55,.45); --page-err:#FB7185; --page-danger:#F87171;
+  --page-sh-card:0 1px 1px rgba(0,0,0,.3),inset 0 0 0 1px rgba(255,255,255,.025);
+  --page-sh-btn:0 1px 2px rgba(0,0,0,.3);
+  --page-sh-side:0 1px 0 rgba(0,0,0,.1),0 1px 12px rgba(0,0,0,.16),0 0 1px rgba(0,0,0,.42);
+  --page-sh-pop:0 16px 40px rgba(0,0,0,.5),0 0 0 1px #262626;
+  --page-accent-soft:color-mix(in srgb,var(--page-accent) 18%,transparent);
+  --page-accent-text:color-mix(in srgb,var(--page-accent) 65%,white);
+  color-scheme:dark;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--page-bg);color:var(--page-text);font-family:var(--page-sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;transition:background .2s}
+.t-light,.t-dark{background:var(--page-bg);color:var(--page-text)}
+.ic{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+.num{font-variant-numeric:tabular-nums}
+.mono{font-family:var(--page-mono)}
+
+/* ── 文档外壳：浮动侧栏 + 内容 ── */
+.shell{display:flex;gap:12px;padding:12px;min-height:100vh}
+.toc{position:sticky;top:12px;align-self:flex-start;width:232px;height:calc(100vh - 24px);flex-shrink:0;display:flex;flex-direction:column;gap:2px;
+  background:var(--page-tray);border:1px solid var(--page-side-border);border-radius:24px;box-shadow:var(--page-sh-side);padding:12px;overflow:auto}
+.who{display:flex;align-items:center;gap:10px;padding:4px 6px 12px}
+.mark{width:30px;height:30px;border-radius:9px;background:linear-gradient(var(--page-accent),var(--page-accent-deep));color:#fff;display:grid;place-items:center;font-weight:600;font-size:14px;flex-shrink:0}
+.who .n{font-weight:500;font-size:13.5px}.who .s{font-size:12px;color:var(--page-text-3)}
+.qs{display:flex;align-items:center;gap:8px;height:34px;padding:0 8px 0 10px;border-radius:10px;background:var(--page-card);border:1px solid var(--page-border);box-shadow:var(--page-sh-btn);color:var(--page-text-3);font-size:13px;margin-bottom:8px}
+.qs .sp{flex:1}
+kbd{font-family:var(--page-sans);font-size:11px;background:var(--page-tray-2);color:var(--page-text-2);border-radius:5px;padding:1px 6px}
+.toc .grp{font-size:12px;color:var(--page-text-3);padding:10px 10px 4px}
+.toc a{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:10px;color:var(--page-text-2);text-decoration:none;font-size:13.5px;font-weight:500;transition:background .15s,color .15s}
+.toc a:hover{background:var(--page-tray-2);color:var(--page-text)}
+.toc a.active{background:var(--page-card);color:var(--page-text);box-shadow:var(--page-sh-card)}
+.toc a .k{margin-left:auto;font-size:11px;color:var(--page-text-3)}
+.toc .foot{margin-top:auto;padding-top:12px}
+.content{flex:1;min-width:0;max-width:1120px;padding:24px 28px 140px}
+
+.top{display:flex;align-items:flex-start;gap:20px;flex-wrap:wrap}
+.top .t{flex:1;min-width:280px}
+h1.page{font-size:clamp(24px,3.2vw,32px);font-weight:600;letter-spacing:-.6px;line-height:1.2}
+.page-sub{color:var(--page-text-2);font-size:14px;margin-top:8px;max-width:720px}
+.page-meta{color:var(--page-text-3);font-size:12.5px;margin-top:6px}
+.accents{display:flex;align-items:center;gap:8px;background:var(--page-tray);border-radius:12px;padding:6px 10px}
+.accents .l{font-size:12px;color:var(--page-text-2);margin-right:2px}
+.adot{width:18px;height:18px;border-radius:50%;border:0;cursor:pointer;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08);transition:transform .12s}
+.adot:hover{transform:scale(1.12)}
+.adot.on{box-shadow:0 0 0 2px var(--page-bg),0 0 0 4px currentColor}
+
+section{padding-top:48px;scroll-margin-top:12px}
+h2{display:flex;align-items:center;gap:10px;font-size:20px;font-weight:500;letter-spacing:-.2px;margin-bottom:6px}
+h2 .no{font-size:12px;font-weight:500;color:var(--page-text-2);background:var(--page-tray);border-radius:7px;padding:2px 7px;font-variant-numeric:tabular-nums}
+.lead{color:var(--page-text-2);font-size:13.5px;margin-bottom:16px;max-width:760px}
+h3{font-size:14px;font-weight:500;margin:20px 0 10px}
+
+/* ── 表面层级 ── */
+.tray{background:var(--page-tray);border-radius:16px;padding:8px}
+.card{background:var(--page-card);border-radius:10px;box-shadow:var(--page-sh-card);padding:12px}
+.card-h{display:flex;align-items:center;gap:8px;font-size:13.5px;font-weight:500;padding:4px 6px 10px}
+.card-h .sp{flex:1}.card-h .sub{font-size:12px;color:var(--page-text-3);font-weight:400}
+
+/* ── 按钮 ── */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:34px;padding:0 12px;border-radius:10px;font:500 13.5px var(--page-sans);
+  border:1px solid var(--page-border);background:var(--page-card);color:var(--page-text);box-shadow:var(--page-sh-btn);cursor:pointer;white-space:nowrap;
+  transition:transform .12s ease,background .15s,border-color .15s,filter .15s}
+.btn:hover{border-color:var(--page-border-strong)}
+.btn:active{transform:scale(.97)}
+.btn.pri{background:linear-gradient(var(--page-accent),var(--page-accent-deep));color:#fff;border-color:transparent;box-shadow:0 1px 2px rgba(0,0,0,.1),inset 0 1px 0 rgba(255,255,255,.18)}
+.btn.pri:hover{filter:brightness(1.07)}
+.btn.soft{background:var(--page-tray);box-shadow:none;color:var(--page-text-2)}
+.btn.ghost{background:transparent;border-color:transparent;box-shadow:none;color:var(--page-text-2)}
+.btn.ghost:hover{background:var(--page-tray);color:var(--page-text)}
+.btn.danger{color:var(--page-danger)}
+.btn.danger:hover{border-color:color-mix(in srgb,var(--page-danger) 45%,transparent)}
+.btn.danger-solid{background:linear-gradient(#E5484D,#C2262C);color:#fff;border-color:transparent}
+.btn.sm{height:28px;padding:0 10px;font-size:12.5px;border-radius:8px}
+.btn.icon{width:34px;padding:0}.btn.icon.sm{width:28px}
+.btn[disabled],.btn.dis{opacity:.45;cursor:not-allowed;transform:none}
+
+/* 按钮组（工具栏） */
+.bgroup{display:inline-flex;align-items:center;gap:2px;padding:2px;background:var(--page-card);border:1px solid var(--page-border);border-radius:10px;box-shadow:var(--page-sh-btn)}
+.bgroup button{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px;border:0;border-radius:8px;background:transparent;color:var(--page-text-2);font:500 13px var(--page-sans);cursor:pointer;white-space:nowrap;transition:background .15s,color .15s,transform .12s}
+.bgroup button:hover{background:var(--page-tray);color:var(--page-text)}
+.bgroup button:active{transform:scale(.96)}
+.bgroup button.on{background:var(--page-accent-soft);color:var(--page-accent-text)}
+.bgroup button.dis{opacity:.4;cursor:not-allowed}
+.bgroup button.dis:hover{background:transparent;color:var(--page-text-2)}
+
+/* 状态胶囊：颜色 + 形状双编码 */
+.pill{display:inline-flex;align-items:center;gap:7px;height:24px;padding:0 9px 0 8px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.pill .d{width:6px;height:6px;border-radius:50%;background:currentColor;box-shadow:0 0 0 3px color-mix(in srgb,currentColor 20%,transparent)}
+.pill.ok{background:var(--page-ok-bg);color:var(--page-ok)}
+.pill.warn{background:var(--page-warn-bg);color:var(--page-warn)}
+.pill.warn .d{width:8px;height:8px;background:transparent;border:1.6px solid currentColor;border-right-color:transparent;box-shadow:none}
+.pill.off{background:var(--page-err-bg);color:var(--page-err)}
+.pill.off .d{width:7px;height:7px;background:transparent;border:1.6px solid currentColor;box-shadow:none}
+.pill.run{background:var(--page-accent-soft);color:var(--page-accent-text)}
+.pill.mute{background:var(--page-tray);color:var(--page-text-2)}
+.chip{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 8px;border-radius:8px;background:var(--page-tray);color:var(--page-text-2);font-size:12px;font-weight:500;font-variant-numeric:tabular-nums;white-space:nowrap}
+.chip b{color:var(--page-text);font-weight:500}.chip .g{color:var(--page-ok)}
+.chip .ic{width:13px;height:13px}
+.chip.on{background:var(--page-accent-soft);color:var(--page-accent-text)}
+
+/* 设备列表项 */
+.navh{font-size:12px;color:var(--page-text-3);padding:10px 8px 4px;display:flex;align-items:center}
+.navh .c{margin-left:auto;font-size:11px;background:var(--page-tray-2);border-radius:6px;padding:0 6px;color:var(--page-text-2)}
+.dev{display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:12px;cursor:pointer;transition:background .15s}
+.dev:hover{background:var(--page-tray-2)}
+.dev.sel{background:var(--page-card);box-shadow:var(--page-sh-card)}
+.dev .di{width:32px;height:32px;border-radius:9px;background:var(--page-card);border:1px solid var(--page-border);display:grid;place-items:center;color:var(--page-text-2);flex-shrink:0}
+.dev.sel .di{background:var(--page-accent-soft);color:var(--page-accent-text);border-color:transparent}
+.dev .meta{min-width:0;flex:1}
+.dev .nm{font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dev .sm{font-size:12px;color:var(--page-text-3);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dev .st{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.dev .st.on{background:#65A30D;box-shadow:0 0 0 3px color-mix(in srgb,#65A30D 22%,transparent)}
+.dev .st.off{border:1.5px solid var(--page-text-3)}
+.dev.offline .nm{color:var(--page-text-2)}.dev.offline .di{opacity:.6}
+
+/* ── 应用窗口 mock ── */
+.scrollx{overflow-x:auto;padding:2px 0 24px}
+.app{min-width:960px;background:var(--page-bg);border:1px solid var(--page-border);border-radius:20px;box-shadow:var(--page-sh-pop);padding:8px;display:flex;gap:8px}
+.app .side{width:236px;flex-shrink:0;display:flex;flex-direction:column;gap:2px;background:var(--page-tray);border:1px solid var(--page-side-border);border-radius:18px;box-shadow:var(--page-sh-side);padding:10px}
+/* 已连接时侧栏收成图标栏，把宽度让给画面 */
+.app .side.rail{width:60px;align-items:center;padding:10px 6px;gap:4px}
+.rail .ri{position:relative;width:40px;height:40px;border-radius:12px;display:grid;place-items:center;color:var(--page-text-2);cursor:pointer;border:0;background:transparent;transition:background .15s}
+.rail .ri:hover{background:var(--page-tray-2)}
+.rail .ri.sel{background:var(--page-card);box-shadow:var(--page-sh-card);color:var(--page-accent-text)}
+.rail .ri.offline{opacity:.5}
+.rail .ri .st{position:absolute;right:6px;bottom:6px;width:8px;height:8px;border-radius:50%;border:2px solid var(--page-tray)}
+.rail .ri .st.on{background:#65A30D}.rail .ri .st.off{background:var(--page-text-3)}
+.rail .sep{width:24px;height:1px;background:var(--page-border);margin:4px 0}
+.app .main{flex:1;min-width:0;display:flex;flex-direction:column;gap:8px;padding:4px 2px 2px}
+.hdr{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:4px 4px 2px;min-height:40px}
+.hdr .ttl{font-size:18px;font-weight:500;letter-spacing:-.2px;margin-right:4px}
+.hdr .sp{flex:1}
+.abody{display:flex;gap:8px;min-height:0}
+.stage{flex:1;min-width:0;display:flex;flex-direction:column;gap:8px}
+.rp{width:248px;flex-shrink:0;display:flex;flex-direction:column;gap:8px}
+.tbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:0 2px}
+.tbar .sp{flex:1}
+
+/* 远端画面（远端内容本身，保持深色桌面） */
+.screen{position:relative;border-radius:10px;overflow:hidden;height:380px;background:radial-gradient(900px 480px at 70% 15%,#24476f 0%,#152a45 45%,#0b1522 100%)}
+.screen .win{position:absolute;border-radius:8px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.08)}
+.screen .wt{height:24px;background:rgba(255,255,255,.08);display:flex;align-items:center;padding:0 10px;font-size:11px;color:#d4dceb}
+.screen .wb{background:rgba(10,18,28,.7);padding:10px 12px;font-family:var(--page-mono);font-size:11px;color:#9cb8d0;line-height:1.75;height:100%}
+.screen .task{position:absolute;left:0;right:0;bottom:0;height:34px;background:rgba(8,14,22,.85);display:flex;align-items:center;gap:8px;padding:0 12px}
+.screen .task i{width:20px;height:20px;border-radius:5px;background:rgba(255,255,255,.1)}
+.fbadge{position:absolute;top:10px;left:10px;display:flex;align-items:center;gap:8px;height:28px;padding:0 10px;border-radius:9px;background:var(--page-card);color:var(--page-text);font-size:12px;font-weight:500;box-shadow:var(--page-sh-pop)}
+.fbadge .g{color:var(--page-ok)}
+.float{position:absolute;left:50%;bottom:46px;transform:translateX(-50%);box-shadow:var(--page-sh-pop)}
+
+.bar{margin:4px 2px 12px}
+.bar .lab{display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px}
+.bar .lab .v{color:var(--page-text-2);font-variant-numeric:tabular-nums}
+.track{height:6px;border-radius:99px;background:var(--page-tray-2);overflow:hidden}
+.track i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--page-accent),var(--page-accent-deep))}
+.total{display:flex;align-items:baseline;gap:6px;padding:0 2px 10px}
+.total .big{font-size:28px;font-weight:600;letter-spacing:-.6px;font-variant-numeric:tabular-nums}
+.total .u{color:var(--page-text-2);font-size:13px}
+.kv{display:flex;justify-content:space-between;align-items:center;padding:8px 2px;border-bottom:1px solid var(--page-border);font-size:12.5px}
+.kv:last-child{border:0}.kv .k{color:var(--page-text-2)}.kv .v{font-variant-numeric:tabular-nums;font-weight:500}
+
+/* 空态 / 连接中 */
+.center{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:36px 20px}
+.tile{width:44px;height:44px;border-radius:12px;background:var(--page-card);box-shadow:var(--page-sh-card);display:grid;place-items:center;color:var(--page-accent-text);margin-bottom:14px}
+.tile .ic{width:20px;height:20px}
+.center .big{font-size:18px;font-weight:500;letter-spacing:-.2px}
+.center .sub{color:var(--page-text-2);font-size:13.5px;margin:6px 0 18px;max-width:380px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.recent{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:8px}
+.rc{display:flex;flex-direction:column;gap:8px;cursor:pointer;transition:box-shadow .15s}
+.rc:hover{box-shadow:var(--page-sh-card),0 0 0 1px var(--page-border-strong)}
+.rc .top2{display:flex;align-items:center;gap:8px}
+.rc .di{width:28px;height:28px;border-radius:8px;background:var(--page-tray);display:grid;place-items:center;color:var(--page-text-2)}
+.rc .n{font-size:13px;font-weight:500}.rc .m{font-size:12px;color:var(--page-text-3);font-variant-numeric:tabular-nums}
+.checks{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin-top:14px}
+
+.steps{display:flex;flex-direction:column;gap:2px;width:100%;max-width:360px;text-align:left;margin-top:4px}
+.step{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:10px;font-size:13.5px}
+.step .sd{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;flex-shrink:0}
+.step.done{color:var(--page-text-2)}.step.done .sd{background:var(--page-ok-bg);color:var(--page-ok)}
+.step.done .sd .ic{width:12px;height:12px;stroke-width:2.5}
+.step.now{background:var(--page-card);box-shadow:var(--page-sh-card);font-weight:500}
+.step.now .sd{border:2px solid var(--page-tray-2);border-top-color:var(--page-accent)}
+.step.todo{color:var(--page-text-3)}.step.todo .sd{border:1.5px dashed var(--page-text-3)}
+.step .t2{margin-left:auto;font-size:12px;color:var(--page-text-3);font-variant-numeric:tabular-nums;font-weight:400}
+@media (prefers-reduced-motion:no-preference){.step.now .sd{animation:spin 1s linear infinite}}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* 文件、列表行 */
+.frow{display:flex;align-items:center;gap:12px;padding:10px 4px;border-bottom:1px solid var(--page-border)}
+.frow:last-child{border:0}
+.fi{width:34px;height:34px;border-radius:9px;background:var(--page-tray);display:grid;place-items:center;color:var(--page-text-2);flex-shrink:0}
+.fm{flex:1;min-width:0}
+.fn{font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fs{font-size:12px;color:var(--page-text-3);margin-top:2px;font-variant-numeric:tabular-nums}
+.fm .track{margin-top:8px;height:5px}
+
+.grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+.mons{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.mon{border-radius:12px;padding:10px;background:var(--page-card);box-shadow:var(--page-sh-card);cursor:pointer;transition:box-shadow .15s}
+.mon.sel{box-shadow:0 0 0 2px var(--page-accent),0 0 0 5px var(--page-accent-soft)}
+.mon .scr{height:64px;border-radius:7px;background:linear-gradient(135deg,#24476f,#0b1522);margin-bottom:10px;position:relative}
+.mon .scr span{position:absolute;right:6px;top:6px;font-size:11px;color:#fff;background:rgba(0,0,0,.35);border-radius:5px;padding:0 6px}
+.mon .ml{font-size:13px;font-weight:500}.mon .mr{font-size:12px;color:var(--page-text-3);font-variant-numeric:tabular-nums}
+
+.toast{display:flex;align-items:flex-start;gap:10px;margin-bottom:8px}
+.toast:last-child{margin-bottom:0}
+.toast .ti{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;flex-shrink:0}
+.toast .ti.info{background:var(--page-accent-soft);color:var(--page-accent-text)}
+.toast .ti.ok{background:var(--page-ok-bg);color:var(--page-ok)}
+.toast .ti.err{background:var(--page-err-bg);color:var(--page-err)}
+.toast .tt{flex:1;min-width:0}.toast .m{font-size:13.5px;font-weight:500}.toast .s{font-size:12.5px;color:var(--page-text-2);margin-top:1px}
+.toast .tm{font-size:11.5px;color:var(--page-text-3);white-space:nowrap}
+
+/* 弹窗 */
+.mstage{position:relative;border-radius:16px;background:var(--page-tray);padding:36px 16px;display:flex;align-items:center;justify-content:center;min-height:260px;overflow:hidden}
+.mstage::before{content:'';position:absolute;inset:0;background:radial-gradient(circle at 1px 1px,var(--page-tray-2) 1px,transparent 0) 0 0/14px 14px;opacity:.9}
+.modal{position:relative;width:min(380px,100%);background:var(--page-card);border-radius:16px;box-shadow:var(--page-sh-pop);padding:20px}
+.modal .tile{margin-bottom:12px}
+.modal .tile.red{color:var(--page-err);background:var(--page-err-bg);box-shadow:none}
+.modal .mh{font-size:16px;font-weight:500;letter-spacing:-.2px}
+.modal .mb{font-size:13.5px;color:var(--page-text-2);margin-top:6px;line-height:1.6}
+.modal .mf{display:flex;gap:8px;margin-top:18px}
+.modal .mf .btn{flex:1}
+.code{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin:18px 0 10px}
+.code .d{height:50px;border-radius:10px;border:1px solid var(--page-border);background:var(--page-tray);display:grid;place-items:center;font-size:22px;font-weight:500;font-variant-numeric:tabular-nums}
+.code .d.f{background:var(--page-card);box-shadow:var(--page-sh-btn)}
+.code .d.a{background:var(--page-card);border-color:var(--page-accent);box-shadow:0 0 0 3px var(--page-accent-soft)}
+.code .d.a::after{content:'';width:2px;height:22px;background:var(--page-accent);border-radius:2px}
+.sig{display:flex;justify-content:center;gap:6px;flex-wrap:wrap}
+.warnbox{display:flex;gap:10px;align-items:flex-start;background:var(--page-err-bg);color:var(--page-err);border-radius:10px;padding:10px 12px;margin-top:12px;font-size:12.5px;line-height:1.6}
+
+/* 设置 */
+.srow{display:flex;align-items:center;gap:16px;padding:12px 4px;border-bottom:1px solid var(--page-border)}
+.srow:last-child{border:0}
+.srow .sl{flex:1;min-width:0}.srow .n{font-size:13.5px;font-weight:500}.srow .d{font-size:12.5px;color:var(--page-text-3);margin-top:1px}
+.seg{display:inline-flex;gap:2px;background:var(--page-tray);border-radius:10px;padding:3px}
+.seg button{border:0;background:transparent;color:var(--page-text-2);font:500 12.5px var(--page-sans);height:26px;padding:0 11px;border-radius:7px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;font-variant-numeric:tabular-nums;transition:background .15s,color .15s}
+.seg button:hover{color:var(--page-text)}
+.seg button.on{background:var(--page-card);color:var(--page-text);box-shadow:var(--page-sh-btn),0 0 0 .5px var(--page-border)}
+.seg.full{display:flex}.seg.full button{flex:1;justify-content:center}
+.sw{width:38px;height:22px;border-radius:99px;background:var(--page-tray-2);border:0;position:relative;cursor:pointer;flex-shrink:0;transition:background .15s}
+.sw i{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:linear-gradient(#fff,#f2f2f2);box-shadow:0 1px 2px rgba(0,0,0,.2);transition:left .15s ease-out}
+.sw.on{background:linear-gradient(var(--page-accent),var(--page-accent-deep))}.sw.on i{left:18px}
+
+/* token 展示 */
+.gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+.sws{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.swc .chipc{height:40px;border-radius:9px;box-shadow:inset 0 0 0 1px rgba(127,127,127,.18)}
+.swc .cn{font-size:12px;font-weight:500;margin-top:6px}.swc .cl{font-size:11px;color:var(--page-text-3);font-family:var(--page-mono)}
+.note{color:var(--page-text-2);font-size:12.5px;margin-top:10px}
+.typ{display:flex;align-items:baseline;gap:10px;padding:6px 0}.typ .l{width:76px;font-size:11.5px;color:var(--page-text-3);flex-shrink:0}
+.radii{display:flex;gap:10px;align-items:flex-end;margin-top:4px}
+.radii div{background:var(--page-tray);border:1px solid var(--page-border);display:grid;place-items:end center;font-size:10.5px;color:var(--page-text-3);padding-bottom:3px}
+.shadows{display:flex;gap:12px;margin-top:4px}
+.shadows div{flex:1;height:52px;border-radius:10px;background:var(--page-card);display:grid;place-items:center;font-size:11.5px;color:var(--page-text-2)}
+ul.pr{list-style:none;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px}
+ul.pr li{font-size:13.5px;color:var(--page-text-2)}
+ul.pr li b{display:block;color:var(--page-text);font-weight:500;margin-bottom:3px}
+.cmp{width:100%;border-collapse:collapse;font-size:13px}
+.cmp th{text-align:left;color:var(--page-text-3);font-weight:500;font-size:12px;padding:8px 10px;border-bottom:1px solid var(--page-border)}
+.cmp td{padding:9px 10px;border-bottom:1px solid var(--page-border);vertical-align:top}
+.cmp tr:last-child td{border:0}.cmp td:first-child{font-weight:500;white-space:nowrap}
+.cmp td.o{color:var(--page-text-3)}
+pre.code-b{background:var(--page-tray);border-radius:12px;padding:14px 16px;font:12.5px/1.7 var(--page-mono);color:var(--page-text);overflow-x:auto}
+pre.code-b .c{color:var(--page-text-3)}
+
+@media(max-width:900px){.toc{display:none}.content{padding:16px 6px 100px}.grid2{grid-template-columns:1fr}.recent{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"></rect><path d="M8 20h8M12 16v4"></path></symbol>
+  <symbol id="i-laptop" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="11" rx="1.5"></rect><path d="M2 19h20"></path></symbol>
+  <symbol id="i-tower" viewBox="0 0 24 24"><rect x="7" y="3" width="10" height="18" rx="2"></rect><path d="M10 7h4M12 17h.01"></path></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></symbol>
+  <symbol id="i-max" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"></path></symbol>
+  <symbol id="i-zoom" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5M8 11h6M11 8v6"></path></symbol>
+  <symbol id="i-screens" viewBox="0 0 24 24"><rect x="2" y="5" width="13" height="10" rx="1.5"></rect><path d="M18 8h3v9H9v-2"></path></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><rect x="8" y="3" width="8" height="4" rx="1"></rect><path d="M8 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"></path></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></symbol>
+  <symbol id="i-port" viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.5"></circle><circle cx="18" cy="12" r="2.5"></circle><path d="M8.5 12h7"></path></symbol>
+  <symbol id="i-pad" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="5"></rect><path d="M7 10v4M5 12h4M16 11h.01M18 13h.01"></path></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></symbol>
+  <symbol id="i-eyeoff" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7c2 0 3.7.7 5.1 1.6M22 12s-3.6 7-10 7c-2 0-3.7-.7-5.1-1.6"></path><path d="m3 3 18 18"></path></symbol>
+  <symbol id="i-power" viewBox="0 0 24 24"><path d="M18.4 6.6a9 9 0 1 1-12.8 0M12 2v10"></path></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M4.9 4.9 7 7M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1"></path></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"></path></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><path d="M14 3v6h6"></path></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"></rect><circle cx="9" cy="10" r="2"></circle><path d="m21 17-5-5-9 8"></path></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="5" rx="1"></rect><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4"></path></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"></path></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"></path></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2 20h20z"></path><path d="M12 10v4M12 17h.01"></path></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"></path></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.9-3M4 4v4h4M4 13a8 8 0 0 0 14.9 3M20 20v-4h-4"></path></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 8 3 8H3s3-1 3-8M10 20a2 2 0 0 0 4 0"></path></symbol>
+  <symbol id="i-volume" viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4z"></path><path d="M15.5 8.5a5 5 0 0 1 0 7"></path></symbol>
+  <symbol id="i-cursor" viewBox="0 0 24 24"><path d="m4 4 7 17 2.5-7.5L21 11z"></path></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"></path></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 20V9M7 14l5-5 5 5M5 4h14"></path></symbol>
+  <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M15 4v16"></path></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></symbol>
+  <symbol id="i-radar" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="5"></circle><path d="M12 12 18 6"></path></symbol>
+</svg>
+
+<div class="shell">
+  <!-- 文档侧栏（同 BoardUI 浮动侧栏） -->
+  <nav class="toc" id="toc">
+    <div class="who"><span class="mark">R</span><div><div class="n">远程桌面</div><div class="s">设计规范 v2</div></div></div>
+    <div class="qs"><svg class="ic"><use href="#i-search"></use></svg><span class="sp">快速跳转</span><kbd>⌘K</kbd></div>
+    <a href="#overview">概览</a>
+    <a href="#principles">设计原则<span class="k">01</span></a>
+    <a href="#tokens">设计 Token<span class="k">02</span></a>
+    <div class="grp">界面状态</div>
+    <a href="#live">已连接主场景<span class="k">03</span></a>
+    <a href="#idle">未连接空态<span class="k">04</span></a>
+    <a href="#connecting">连接中<span class="k">05</span></a>
+    <a href="#file">文件传输<span class="k">06</span></a>
+    <a href="#monitor">多显示器 / 提示<span class="k">07</span></a>
+    <a href="#pairing">配对码弹窗<span class="k">08</span></a>
+    <a href="#modals">断开 / 错误<span class="k">09</span></a>
+    <a href="#settings">设置面板<span class="k">10</span></a>
+    <a href="#themes">明暗双主题<span class="k">11</span></a>
+    <div class="grp">组件与落地</div>
+    <a href="#components">组件规范<span class="k">12</span></a>
+    <a href="#egui">egui 落地映射<span class="k">13</span></a>
+    <div class="foot">
+      <div class="seg full" role="group" aria-label="主题">
+        <button id="themeLight" class="on"><svg class="ic" style="width:14px;height:14px"><use href="#i-sun"></use></svg>浅色</button>
+        <button id="themeDark"><svg class="ic" style="width:14px;height:14px"><use href="#i-moon"></use></svg>深色</button>
+      </div>
+    </div>
+  </nav>
+
+  <main class="content">
+    <section id="overview" style="padding-top:8px">
+      <div class="top">
+        <div class="t">
+          <h1 class="page">远程桌面客户端：画面放在中间，其余界面都往后退</h1>
+          <p class="page-sub">按 BoardUI 的设计语言重绘全部 12 个界面状态：浅灰托盘承载白色卡片、浮动圆角侧栏、渐变主按钮、按钮组工具栏，强调色可切换，明暗主题同构。</p>
+          <p class="page-meta">落地目标 <span class="mono">leeconnect/src/bin/gui.rs</span>（egui/eframe）· 更新 2026-11-23 · 取代 v1（深色 teal + IBM Plex）</p>
+        </div>
+        <div class="accents" id="accents">
+          <span class="l">强调色</span>
+          <button class="adot on" style="background:linear-gradient(#2673FE,#144BE9);color:#2673FE" data-a="#2673FE" data-d="#144BE9" aria-label="蓝"></button>
+          <button class="adot" style="background:linear-gradient(#7C3AED,#5B21B6);color:#7C3AED" data-a="#7C3AED" data-d="#5B21B6" aria-label="紫"></button>
+          <button class="adot" style="background:linear-gradient(#DB2777,#BE185D);color:#DB2777" data-a="#DB2777" data-d="#BE185D" aria-label="粉"></button>
+          <button class="adot" style="background:linear-gradient(#EA580C,#C2410C);color:#EA580C" data-a="#EA580C" data-d="#C2410C" aria-label="橙"></button>
+          <button class="adot" style="background:linear-gradient(#059669,#047857);color:#059669" data-a="#059669" data-d="#047857" aria-label="翠绿"></button>
+          <button class="adot" style="background:linear-gradient(#0D9488,#0F766E);color:#0D9488" data-a="#0D9488" data-d="#0F766E" aria-label="青（v1 延续）"></button>
+        </div>
+      </div>
+    </section>
+
+    <section id="principles">
+      <h2><span class="no">01</span>原则：分层靠明度，不靠描边</h2>
+      <p class="lead">v1 用深色底和描边把每个区块框出来。v2 改用两级表面：浅灰托盘负责分区，白色卡片放内容，界面整体更轻，远端画面成为唯一的重色块。</p>
+      <div class="tray"><ul class="pr">
+        <li class="card"><b>画面优先</b>连接后远端画面占主体；侧栏、信息面板都可以收起，浮动工具条只保留 3 个高频操作。</li>
+        <li class="card"><b>托盘承载卡片</b>托盘 #F7F7F7（圆角 16、内边距 8）分区，白色卡片（圆角 10、1px 阴影）承载内容，不再每块都加描边。</li>
+        <li class="card"><b>状态双编码</b>实心点表示已连接，半环表示连接中，空心环表示未连接；延迟 &lt;40ms 绿、40–90ms 黄、&gt;90ms 红。</li>
+        <li class="card"><b>一个强调色</b>默认蓝 #2673FE，可换 6 种；危险操作只用独立的红色，并且必须二次确认。</li>
+        <li class="card"><b>克制的按压反馈</b>按下缩放到 0.97，悬停只换底色或描边，不用发光和阴影动画。</li>
+        <li class="card"><b>明暗同构</b>默认浅色，长时间会话推荐深色；两套 token 名称一一对应，组件代码只写一次。</li>
+      </ul></div>
+    </section>
+
+    <section id="tokens">
+      <h2><span class="no">02</span>Token：一套中性灰，加一个可换的强调色</h2>
+      <p class="lead">中性色直接沿用 BoardUI 的 neutral 阶梯（与 Tailwind neutral 一致），状态色用 lime / yellow / rose 的浅底配深字。</p>
+      <div class="gal">
+        <div class="tray"><div class="card-h">表面与文字 · 浅色</div><div class="card"><div class="sws">
+          <div class="swc"><div class="chipc" style="background:#FFFFFF"></div><div class="cn">bg / card</div><div class="cl">#FFFFFF</div></div>
+          <div class="swc"><div class="chipc" style="background:#F7F7F7"></div><div class="cn">tray</div><div class="cl">#F7F7F7</div></div>
+          <div class="swc"><div class="chipc" style="background:#EBEBEB"></div><div class="cn">tray-2 / border</div><div class="cl">#EBEBEB</div></div>
+          <div class="swc"><div class="chipc" style="background:#0A0A0A"></div><div class="cn">text</div><div class="cl">#0A0A0A · 2 #737373</div></div>
+        </div></div></div>
+        <div class="tray"><div class="card-h">表面与文字 · 深色</div><div class="card"><div class="sws">
+          <div class="swc"><div class="chipc" style="background:#121212"></div><div class="cn">bg</div><div class="cl">#121212</div></div>
+          <div class="swc"><div class="chipc" style="background:#171717"></div><div class="cn">tray</div><div class="cl">#171717</div></div>
+          <div class="swc"><div class="chipc" style="background:#1F1F1F"></div><div class="cn">card</div><div class="cl">#1F1F1F</div></div>
+          <div class="swc"><div class="chipc" style="background:#262626"></div><div class="cn">tray-2 / border</div><div class="cl">#262626</div></div>
+        </div></div></div>
+        <div class="tray"><div class="card-h">强调与状态</div><div class="card"><div class="sws">
+          <div class="swc"><div class="chipc" style="background:linear-gradient(var(--page-accent),var(--page-accent-deep))"></div><div class="cn">accent → deep</div><div class="cl">#2673FE → #144BE9</div></div>
+          <div class="swc"><div class="chipc" style="background:#ECFCCB"></div><div class="cn">ok</div><div class="cl">#ECFCCB / #3F6212</div></div>
+          <div class="swc"><div class="chipc" style="background:#FEF9C3"></div><div class="cn">warn</div><div class="cl">#FEF9C3 / #854D0E</div></div>
+          <div class="swc"><div class="chipc" style="background:#FFE4E6"></div><div class="cn">err / danger</div><div class="cl">#FFE4E6 / #A9101D</div></div>
+        </div></div></div>
+        <div class="tray"><div class="card-h">字体</div><div class="card">
+          <div class="typ"><span class="l">标题 20/500</span><span style="font-size:20px;font-weight:500;letter-spacing:-.2px">工位电脑</span></div>
+          <div class="typ"><span class="l">正文 14/400</span><span>Inter + Noto Sans SC</span></div>
+          <div class="typ"><span class="l">数据 等宽数字</span><span class="num" style="color:var(--page-text-2)">18ms · 2560×1440 · 60fps</span></div>
+          <div class="typ"><span class="l">代码 12.5</span><span class="mono" style="font-size:12.5px;color:var(--page-text-2)">ws://signal-host:9700</span></div>
+          <div class="note">数字用 Inter 的 tabular-nums，不再整段切换等宽字体；JetBrains Mono 只用于地址和代码。</div>
+        </div></div>
+        <div class="tray"><div class="card-h">圆角 / 间距</div><div class="card">
+          <div class="radii">
+            <div style="width:52px;height:52px;border-radius:24px">24</div>
+            <div style="width:48px;height:48px;border-radius:16px">16</div>
+            <div style="width:44px;height:44px;border-radius:10px">10</div>
+            <div style="width:40px;height:40px;border-radius:8px">8</div>
+          </div>
+          <div class="note">侧栏 24 · 托盘/弹窗 16 · 卡片/按钮 10 · 小按钮 8 · 间距步进 2·4·8·12·16·24</div>
+        </div></div>
+        <div class="tray"><div class="card-h">阴影</div><div class="card" style="background:var(--page-tray);box-shadow:none">
+          <div class="shadows">
+            <div style="box-shadow:var(--page-sh-card)">card</div>
+            <div style="box-shadow:var(--page-sh-btn);border:1px solid var(--page-border)">button</div>
+            <div style="box-shadow:var(--page-sh-side)">sidebar</div>
+          </div>
+          <div class="note">只有浮层（弹窗、浮动工具条）使用较深的 pop 阴影。</div>
+        </div></div>
+      </div>
+    </section>
+
+    <section id="live">
+      <h2><span class="no">03</span>已连接：远端画面是页面上唯一的重色块</h2>
+      <p class="lead">连接后侧栏收成 60px 图标栏，宽度让给画面；顶栏只保留设备名、状态胶囊和三项指标；工具栏拆成三个按钮组（视图 / 数据 / 安全），「断开」单独放在最右。</p>
+      <div class="scrollx"><div class="app">
+        <aside class="side rail">
+          <span class="mark" style="margin-bottom:6px">R</span>
+          <button class="ri" title="搜索设备 ⌘K"><svg class="ic"><use href="#i-search"></use></svg></button>
+          <span class="sep"></span>
+          <button class="ri" title="DESKTOP-M2SOF0N · 本机"><svg class="ic"><use href="#i-monitor"></use></svg><span class="st on"></span></button>
+          <button class="ri sel" title="工位电脑 · 当前会话"><svg class="ic"><use href="#i-tower"></use></svg><span class="st on"></span></button>
+          <button class="ri offline" title="LAPTOP-UJEGJK · 离线"><svg class="ic"><use href="#i-laptop"></use></svg><span class="st off"></span></button>
+          <span style="flex:1"></span>
+          <button class="ri" title="添加设备"><svg class="ic"><use href="#i-plus"></use></svg></button>
+          <button class="ri" title="展开侧栏"><svg class="ic"><use href="#i-panel"></use></svg></button>
+        </aside>
+        <div class="main">
+          <div class="hdr">
+            <span class="ttl">工位电脑</span>
+            <span class="pill ok"><span class="d"></span>已连接</span>
+            <span class="chip"><span class="g">18ms</span></span><span class="chip"><b>2560×1440</b></span><span class="chip">60fps</span>
+            <span class="chip on" title="视频"><svg class="ic"><use href="#i-monitor"></use></svg></span><span class="chip on" title="音频"><svg class="ic"><use href="#i-volume"></use></svg></span><span class="chip on" title="剪贴板"><svg class="ic"><use href="#i-clip"></use></svg></span><span class="chip" title="手柄"><svg class="ic"><use href="#i-pad"></use></svg></span>
+            <span class="sp"></span>
+            <button class="btn ghost icon" aria-label="通知"><svg class="ic"><use href="#i-bell"></use></svg></button>
+            <button class="btn ghost icon" aria-label="信息面板"><svg class="ic"><use href="#i-panel"></use></svg></button>
+          </div>
+          <div class="abody">
+            <div class="stage">
+              <div class="tray">
+                <div class="screen">
+                  <div class="win" style="left:9%;top:12%;width:42%;height:52%"><div class="wt">终端 — build</div><div class="wb">$ cargo run --bin host<br>&nbsp;&nbsp;Finished in 4.21s<br>[host] DXGI 2560×1440<br>[host] session live ▸ 60fps</div></div>
+                  <div class="win" style="right:8%;top:22%;width:33%;height:40%"><div class="wt">文件管理器</div><div class="wb" style="color:#a9bfd4">Documents/<br>Projects/<br>notes.md</div></div>
+                  <div class="task"><i></i><i></i><i></i><i></i></div>
+                  <div class="fbadge"><span class="pill ok" style="height:18px;padding:0 6px"><span class="d"></span></span>工位电脑 · <span class="g num">18ms</span></div>
+                  <div class="bgroup float">
+                    <button class="on"><svg class="ic"><use href="#i-max"></use></svg>全屏</button>
+                    <button>1:1</button>
+                    <button><svg class="ic"><use href="#i-clip"></use></svg>剪贴板</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="rp">
+              <div class="tray">
+                <div class="card-h">端到端延迟<span class="sp"></span><span class="sub">近 10s</span></div>
+                <div class="card">
+                  <div class="total"><span class="big">18.0</span><span class="u">ms</span><span class="pill ok" style="margin-left:auto">良好</span></div>
+                  <div class="bar"><div class="lab"><span>编码</span><span class="v">5.4ms</span></div><div class="track"><i style="width:30%"></i></div></div>
+                  <div class="bar"><div class="lab"><span>传输</span><span class="v">4.8ms</span></div><div class="track"><i style="width:27%"></i></div></div>
+                  <div class="bar"><div class="lab"><span>采集</span><span class="v">3.1ms</span></div><div class="track"><i style="width:17%"></i></div></div>
+                  <div class="bar"><div class="lab"><span>解码</span><span class="v">2.9ms</span></div><div class="track"><i style="width:16%"></i></div></div>
+                  <div class="bar" style="margin-bottom:2px"><div class="lab"><span>渲染</span><span class="v">1.8ms</span></div><div class="track"><i style="width:10%"></i></div></div>
+                </div>
+              </div>
+              <div class="tray">
+                <div class="card-h">会话</div>
+                <div class="card" style="padding:4px 10px">
+                  <div class="kv"><span class="k">时长</span><span class="v">00:12:47</span></div>
+                  <div class="kv"><span class="k">流量</span><span class="v">1.84 GB</span></div>
+                  <div class="kv"><span class="k">编码器</span><span class="v">H.264 软编</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="tbar">
+            <div class="bgroup">
+              <button class="on"><svg class="ic"><use href="#i-max"></use></svg>全屏</button>
+              <button><svg class="ic"><use href="#i-zoom"></use></svg>缩放</button>
+              <button><svg class="ic"><use href="#i-screens"></use></svg>多屏</button>
+            </div>
+            <div class="bgroup">
+              <button><svg class="ic"><use href="#i-clip"></use></svg>剪贴板</button>
+              <button><svg class="ic"><use href="#i-folder"></use></svg>文件</button>
+              <button><svg class="ic"><use href="#i-port"></use></svg>端口</button>
+            </div>
+            <div class="bgroup">
+              <button class="dis" title="远端未检测到手柄驱动"><svg class="ic"><use href="#i-pad"></use></svg>手柄</button>
+              <button><svg class="ic"><use href="#i-lock"></use></svg>锁屏</button>
+              <button class="on"><svg class="ic"><use href="#i-eyeoff"></use></svg>隐私屏</button>
+            </div>
+            <span class="sp"></span>
+            <button class="btn icon" aria-label="设置"><svg class="ic"><use href="#i-gear"></use></svg></button>
+            <button class="btn danger"><svg class="ic"><use href="#i-power"></use></svg>断开</button>
+          </div>
+        </div>
+      </div></div>
+      <p class="note">延迟分段按耗时从大到小排序，最大项排在第一行；顶部的大数字是 5 段之和。</p>
+    </section>
+
+    <section id="idle">
+      <h2><span class="no">04</span>未连接：一个主操作，加最近会话</h2>
+      <div class="scrollx"><div class="app">
+        <aside class="side">
+          <div class="who" style="padding:4px 4px 10px"><span class="mark">R</span><div><div class="n">远程桌面</div><div class="s">本机 · DESKTOP-M2SOF0N</div></div></div>
+          <div class="qs"><svg class="ic"><use href="#i-search"></use></svg><span class="sp">搜索设备</span><kbd>⌘K</kbd></div>
+          <div class="navh">我的设备<span class="c">2</span></div>
+          <div class="dev"><div class="di"><svg class="ic"><use href="#i-monitor"></use></svg></div><div class="meta"><div class="nm">DESKTOP-M2SOF0N</div><div class="sm">本机</div></div><span class="st on"></span></div>
+          <div class="dev"><div class="di"><svg class="ic"><use href="#i-tower"></use></svg></div><div class="meta"><div class="nm">工位电脑</div><div class="sm">局域网 · 可连接</div></div><span class="st on"></span></div>
+        </aside>
+        <div class="main">
+          <div class="hdr"><span class="ttl">设备</span><span class="pill off"><span class="d"></span>未连接</span><span class="sp"></span><button class="btn ghost icon" aria-label="通知"><svg class="ic"><use href="#i-bell"></use></svg></button></div>
+          <div class="tray" style="flex:1">
+            <div class="center">
+              <div class="tile"><svg class="ic"><use href="#i-monitor"></use></svg></div>
+              <div class="big">选择左侧设备开始连接</div>
+              <div class="sub">不在列表里的设备，可以用对方屏幕上显示的 6 位连接码直接发起会话。</div>
+              <div class="row" style="justify-content:center"><button class="btn pri"><svg class="ic"><use href="#i-arrow"></use></svg>输入连接码</button><button class="btn"><svg class="ic"><use href="#i-radar"></use></svg>扫描局域网</button></div>
+              <div class="checks">
+                <span class="pill ok"><span class="d"></span>信令可达</span>
+                <span class="pill ok"><span class="d"></span>本机已注册</span>
+                <span class="pill ok"><span class="d"></span>防火墙已放行</span>
+              </div>
+            </div>
+            <div class="card-h" style="padding-top:2px">最近会话<span class="sp"></span><button class="btn ghost sm">全部</button></div>
+            <div class="recent">
+              <div class="card rc"><div class="top2"><div class="di"><svg class="ic"><use href="#i-tower"></use></svg></div><div><div class="n">工位电脑</div><div class="m">11-23 07:40 · 2560×1440</div></div></div></div>
+              <div class="card rc"><div class="top2"><div class="di"><svg class="ic"><use href="#i-laptop"></use></svg></div><div><div class="n">LAPTOP-UJEGJK</div><div class="m">11-21 14:02 · 1920×1080</div></div></div></div>
+              <div class="card rc" style="justify-content:center;align-items:center;color:var(--page-text-3);box-shadow:none;background:transparent;border:1px dashed var(--page-border-strong)"><span class="row" style="font-size:13px"><svg class="ic"><use href="#i-plus"></use></svg>添加设备</span></div>
+            </div>
+          </div>
+        </div>
+      </div></div>
+    </section>
+
+    <section id="connecting">
+      <h2><span class="no">05</span>连接中：显示进行到哪一步，而不是一个转圈</h2>
+      <p class="lead">v1 只有一个旋转环。v2 借用 BoardUI「智能体任务进度」的步骤列表，每一步显示耗时，卡住的位置一眼可见。</p>
+      <div class="tray" style="max-width:640px">
+        <div class="center" style="padding:28px 20px">
+          <span class="pill warn" style="margin-bottom:12px"><span class="d"></span>连接中</span>
+          <div class="big">正在连接「工位电脑」</div>
+          <div class="sub" style="margin-bottom:12px">局域网直连 · 信令 ws://signal-host:9700</div>
+          <div class="steps">
+            <div class="step done"><span class="sd"><svg class="ic"><use href="#i-check"></use></svg></span>握手<span class="t2">42ms</span></div>
+            <div class="step now"><span class="sd"></span>协商能力（编码器 / 分辨率 / 音频）<span class="t2">0.8s</span></div>
+            <div class="step todo"><span class="sd"></span>拉流</div>
+          </div>
+          <button class="btn ghost sm" style="margin-top:14px">取消</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="file">
+      <h2><span class="no">06</span>文件传输：每行一个文件，状态放在右侧</h2>
+      <div class="tray" style="max-width:560px">
+        <div class="card-h"><svg class="ic" style="color:var(--page-accent-text)"><use href="#i-folder"></use></svg>文件传输<span class="chip" style="margin-left:4px">工位电脑</span><span class="sp"></span><button class="btn ghost icon sm" aria-label="关闭"><svg class="ic"><use href="#i-x"></use></svg></button></div>
+        <div class="card" style="padding:4px 12px">
+          <div class="frow"><div class="fi"><svg class="ic"><use href="#i-archive"></use></svg></div><div class="fm"><div class="fn">release-build-v0.1.0.zip</div><div class="fs">14.2 / 42.8 MB · 6.1 MB/s · 剩余 4s</div><div class="track"><i style="width:33%"></i></div></div><span class="pill run"><svg class="ic" style="width:12px;height:12px"><use href="#i-download"></use></svg>33%</span></div>
+          <div class="frow"><div class="fi"><svg class="ic"><use href="#i-file"></use></svg></div><div class="fm"><div class="fn">session-notes.md</div><div class="fs">12 KB · 已完成</div></div><span class="pill ok"><span class="d"></span>完成</span></div>
+          <div class="frow"><div class="fi"><svg class="ic"><use href="#i-image"></use></svg></div><div class="fm"><div class="fn">screenshot-1440p.png</div><div class="fs">3.4 MB · 连接中断</div></div><span class="pill off"><span class="d"></span>失败</span></div>
+        </div>
+        <div class="row" style="padding:10px 4px 2px"><button class="btn pri sm"><svg class="ic"><use href="#i-upload"></use></svg>发送文件</button><button class="btn sm">清除已完成</button><span style="flex:1"></span><button class="btn ghost sm"><svg class="ic"><use href="#i-refresh"></use></svg>重试失败项</button></div>
+      </div>
+    </section>
+
+    <section id="monitor">
+      <h2><span class="no">07</span>多显示器切换与系统提示</h2>
+      <div class="grid2">
+        <div class="tray">
+          <div class="card-h">远端显示器<span class="sp"></span><span class="sub">2 台</span></div>
+          <div class="mons">
+            <div class="mon sel"><div class="scr"><span>1</span></div><div class="ml">显示器 1 · 主屏</div><div class="mr">2560×1440 · 60Hz</div></div>
+            <div class="mon"><div class="scr" style="opacity:.75"><span>2</span></div><div class="ml">显示器 2</div><div class="mr">1920×1080 · 60Hz</div></div>
+          </div>
+          <div class="row" style="padding:10px 2px 2px"><button class="btn sm">全部平铺</button><button class="btn pri sm">切到显示器 1</button></div>
+        </div>
+        <div class="tray">
+          <div class="card-h">通知<span class="sp"></span><button class="btn ghost sm">全部已读</button></div>
+          <div class="card">
+            <div class="toast"><div class="ti info"><svg class="ic"><use href="#i-clip"></use></svg></div><div class="tt"><div class="m">剪贴板已同步</div><div class="s">文本 · 128 字符已送往远端</div></div><span class="tm">刚刚</span></div>
+            <div class="toast"><div class="ti ok"><svg class="ic"><use href="#i-eyeoff"></use></svg></div><div class="tt"><div class="m">隐私屏已开启</div><div class="s">远端物理屏变黑，本地键鼠已屏蔽</div></div><span class="tm">1 分钟前</span></div>
+            <div class="toast"><div class="ti err"><svg class="ic"><use href="#i-alert"></use></svg></div><div class="tt"><div class="m">剪贴板同步失败</div><div class="s">内容超出 4 MB 上限</div></div><span class="tm">3 分钟前</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="pairing">
+      <h2><span class="no">08</span>连接码：6 个独立格子，当前格高亮</h2>
+      <div class="mstage"><div class="modal">
+        <div class="tile" style="margin-bottom:12px"><svg class="ic"><use href="#i-lock"></use></svg></div>
+        <div class="mh">输入连接码</div>
+        <div class="mb">输入对方设备上显示的 6 位配对码，建立加密会话。</div>
+        <div class="code"><div class="d f">4</div><div class="d f">8</div><div class="d f">2</div><div class="d f">1</div><div class="d a"></div><div class="d"></div></div>
+        <div class="sig"><span class="chip mono" style="font-family:var(--page-mono);font-size:11.5px">ws://signal-host:9700</span><span class="chip">TLS 1.3</span></div>
+        <div class="mf"><button class="btn">取消</button><button class="btn pri" disabled="">连接</button></div>
+      </div></div>
+      <p class="note">6 位填满之前「连接」按钮保持禁用；支持粘贴整段配对码。</p>
+    </section>
+
+    <section id="modals">
+      <h2><span class="no">09</span>断开确认与连接失败</h2>
+      <div class="grid2">
+        <div class="mstage"><div class="modal">
+          <div class="tile red"><svg class="ic"><use href="#i-power"></use></svg></div>
+          <div class="mh">断开当前会话？</div>
+          <div class="mb">与「工位电脑」的会话会立即结束，进行中的 1 个文件传输会中断。</div>
+          <div class="mf"><button class="btn">继续会话</button><button class="btn danger-solid">确认断开</button></div>
+        </div></div>
+        <div class="mstage"><div class="modal">
+          <div class="tile red"><svg class="ic"><use href="#i-alert"></use></svg></div>
+          <div class="mh">无法连接到「LAPTOP-UJEGJK」</div>
+          <div class="warnbox"><span>握手超时（10s）。对方可能已离线，或防火墙未放行 UDP 9800。</span></div>
+          <div class="mf" style="flex-wrap:wrap"><button class="btn ghost">关闭</button><button class="btn">走中继重试</button><button class="btn pri"><svg class="ic"><use href="#i-refresh"></use></svg>重新连接</button></div>
+        </div></div>
+      </div>
+    </section>
+
+    <section id="settings">
+      <h2><span class="no">10</span>设置：分段控件选模式，开关管功能</h2>
+      <div class="tray" style="max-width:600px">
+        <div class="card-h"><svg class="ic" style="color:var(--page-text-2)"><use href="#i-gear"></use></svg>会话设置<span class="sp"></span><button class="btn ghost icon sm" aria-label="关闭"><svg class="ic"><use href="#i-x"></use></svg></button></div>
+        <div class="card" style="padding:2px 12px">
+          <div class="srow"><div class="sl"><div class="n">画质</div><div class="d">流畅优先降低码率，清晰优先保留细节</div></div><div class="seg"><button>流畅</button><button class="on">均衡</button><button>清晰</button></div></div>
+          <div class="srow"><div class="sl"><div class="n">帧率上限</div><div class="d">越高越流畅，占用带宽越大</div></div><div class="seg"><button>30</button><button class="on">60</button><button>90</button><button>144</button></div></div>
+          <div class="srow"><div class="sl"><div class="n">编码器</div><div class="d">自动优先硬编，失败时回退软编</div></div><div class="seg"><button class="on">自动</button><button>硬编</button><button>软编</button></div></div>
+          <div class="srow"><div class="sl"><div class="n">显示远端光标</div><div class="d">在画面上叠加远端鼠标指针</div></div><button class="sw on" aria-pressed="true" aria-label="显示远端光标"><i></i></button></div>
+          <div class="srow"><div class="sl"><div class="n">相对鼠标模式（游戏）</div><div class="d">Raw Input 捕获位移，适合 FPS</div></div><button class="sw" aria-pressed="false" aria-label="相对鼠标模式"><i></i></button></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="themes">
+      <h2><span class="no">11</span>明暗双主题：同一份组件，两套 token</h2>
+      <p class="lead">左侧边栏底部可以切换整页主题。下面两个缩略图分别固定为浅色和深色，用来对照同一个已连接状态。</p>
+      <div class="grid2">
+        <div class="t-light" style="border-radius:20px">
+          <div class="app" style="min-width:0;flex-direction:column">
+            <div class="hdr"><span class="ttl" style="font-size:15px">工位电脑</span><span class="pill ok"><span class="d"></span>已连接</span><span class="chip"><span class="g">18ms</span></span><span class="sp"></span><span class="chip">浅色</span></div>
+            <div class="tray"><div class="dev sel"><div class="di"><svg class="ic"><use href="#i-tower"></use></svg></div><div class="meta"><div class="nm">工位电脑</div><div class="sm">局域网 · 2560×1440</div></div><span class="st on"></span></div>
+              <div class="row" style="padding:10px 4px 2px"><div class="seg"><button>流畅</button><button class="on">均衡</button><button>清晰</button></div><span style="flex:1"></span><button class="btn pri sm">全屏</button><button class="btn danger sm">断开</button></div></div>
+          </div>
+        </div>
+        <div class="t-dark" style="border-radius:20px">
+          <div class="app" style="min-width:0;flex-direction:column">
+            <div class="hdr"><span class="ttl" style="font-size:15px">工位电脑</span><span class="pill ok"><span class="d"></span>已连接</span><span class="chip"><span class="g">18ms</span></span><span class="sp"></span><span class="chip">深色</span></div>
+            <div class="tray"><div class="dev sel"><div class="di"><svg class="ic"><use href="#i-tower"></use></svg></div><div class="meta"><div class="nm">工位电脑</div><div class="sm">局域网 · 2560×1440</div></div><span class="st on"></span></div>
+              <div class="row" style="padding:10px 4px 2px"><div class="seg"><button>流畅</button><button class="on">均衡</button><button>清晰</button></div><span style="flex:1"></span><button class="btn pri sm">全屏</button><button class="btn danger sm">断开</button></div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="components">
+      <h2><span class="no">12</span>组件规范</h2>
+      <div class="gal">
+        <div class="tray"><div class="card-h">会话状态胶囊 · 三态</div><div class="card">
+          <div class="row"><span class="pill ok"><span class="d"></span>已连接</span><span class="pill warn"><span class="d"></span>连接中</span><span class="pill off"><span class="d"></span>未连接</span></div>
+          <div class="note">实心点 / 半环 / 空心环，颜色和形状同时变化，色弱用户也能区分。</div>
+        </div></div>
+        <div class="tray"><div class="card-h">工具按钮组 · 四态</div><div class="card">
+          <div class="bgroup"><button>默认</button><button style="background:var(--page-tray);color:var(--page-text)">悬停</button><button class="on">激活</button><button class="dis">禁用</button></div>
+          <div class="note">开关类功能（全屏、隐私屏）的激活态用强调色浅底；禁用态降低透明度，并在 tooltip 说明原因。</div>
+        </div></div>
+        <div class="tray"><div class="card-h">按钮层级</div><div class="card">
+          <div class="row"><button class="btn pri sm">主要</button><button class="btn sm">次要</button><button class="btn soft sm">弱化</button><button class="btn ghost sm">幽灵</button></div>
+          <div class="row" style="margin-top:8px"><button class="btn danger sm">危险描边</button><button class="btn danger-solid sm">确认危险</button></div>
+          <div class="note">每个视图最多一个渐变主按钮；红色实心按钮只出现在二次确认弹窗里。</div>
+        </div></div>
+        <div class="tray"><div class="card-h">设备列表项</div>
+          <div class="dev sel"><div class="di"><svg class="ic"><use href="#i-tower"></use></svg></div><div class="meta"><div class="nm">工位电脑</div><div class="sm">局域网 · 2560×1440</div></div><span class="st on"></span></div>
+          <div class="dev"><div class="di"><svg class="ic"><use href="#i-monitor"></use></svg></div><div class="meta"><div class="nm">DESKTOP-M2SOF0N</div><div class="sm">本机</div></div><span class="st on"></span></div>
+          <div class="dev offline"><div class="di"><svg class="ic"><use href="#i-laptop"></use></svg></div><div class="meta"><div class="nm">MacBook</div><div class="sm">上次 11-18</div></div><span class="st off"></span></div>
+          <div class="note" style="padding:0 8px 4px">选中项抬升为白卡片，取代 v1 的左侧色条。</div>
+        </div>
+        <div class="tray"><div class="card-h">分段控件 / 开关</div><div class="card">
+          <div class="row"><div class="seg"><button>30</button><button class="on">60</button><button>90</button></div><button class="sw on" aria-label="开"><i></i></button><button class="sw" aria-label="关"><i></i></button></div>
+          <div class="note">开关打开时用强调色渐变底和白色滑块，对应 BoardUI 的 switch-on 样式。</div>
+        </div></div>
+        <div class="tray"><div class="card-h">指标芯片</div><div class="card">
+          <div class="row"><span class="chip"><span class="g">18ms</span></span><span class="chip"><b>2560×1440</b></span><span class="chip">60fps</span><span class="chip on"><svg class="ic"><use href="#i-volume"></use></svg></span></div>
+          <div class="note">只有延迟带状态色，其余指标保持中性；能力图标开启时显示强调色浅底。</div>
+        </div></div>
+      </div>
+    </section>
+
+    <section id="egui">
+      <h2><span class="no">13</span>egui 落地：哪些能直接做，哪些需要近似</h2>
+      <p class="lead">egui 没有 CSS 那样的渐变和多层阴影，下表列出每项在 gui.rs 里的做法。</p>
+      <div class="tray">
+        <div class="card" style="padding:4px 8px;overflow-x:auto">
+          <table class="cmp">
+            <tbody><tr><th>规范</th><th>egui 做法</th><th>备注</th></tr>
+            <tr><td>托盘 / 卡片</td><td><span class="mono">egui::Frame</span>：fill = TRAY / CARD，圆角 16 / 10，inner_margin 8 / 12</td><td class="o">两级 Frame 嵌套即可</td></tr>
+            <tr><td>卡片阴影</td><td>Frame 的 shadow：offset y=1，blur 2，黑色 5% 透明度</td><td class="o">Shadow 字段名随 egui 版本变化，按项目所用版本填写</td></tr>
+            <tr><td>渐变主按钮</td><td>实色 ACCENT 填充，加 1px ACCENT_DEEP 描边</td><td class="o">需要真渐变时，用 Painter 画两色 Mesh</td></tr>
+            <tr><td>按钮组</td><td>一个 Frame 包住 <span class="mono">ui.horizontal</span>，组内按钮去掉描边，激活态用 selectable_label</td><td class="o">激活色 = selection.bg_fill</td></tr>
+            <tr><td>状态胶囊</td><td>自绘：<span class="mono">painter.rect_filled</span> 画底色，再画圆点或圆环</td><td class="o">半环用 <span class="mono">Shape::line</span> 画圆弧</td></tr>
+            <tr><td>按压缩放 0.97</td><td>省略，改为按下时 fill 加深一级</td><td class="o">egui 没有逐控件的 transform</td></tr>
+            <tr><td>字体</td><td>FontDefinitions 注册 Inter 和 Noto Sans SC，Noto 作为中文回退</td><td class="o">打包体积会增加，可只取常用字子集</td></tr>
+          </tbody></table>
+        </div>
+      </div>
+<pre class="code-b" style="margin-top:12px"><span class="c">// theme.rs · 浅色 token（深色同名，另建 mod dark）</span>
+use egui::Color32;
+pub const BG: Color32          = Color32::from_rgb(0xFF, 0xFF, 0xFF);
+pub const TRAY: Color32        = Color32::from_rgb(0xF7, 0xF7, 0xF7);
+pub const TRAY_2: Color32      = Color32::from_rgb(0xEB, 0xEB, 0xEB);
+pub const CARD: Color32        = Color32::from_rgb(0xFF, 0xFF, 0xFF);
+pub const TEXT: Color32        = Color32::from_rgb(0x0A, 0x0A, 0x0A);
+pub const TEXT_2: Color32      = Color32::from_rgb(0x73, 0x73, 0x73);
+pub const ACCENT: Color32      = Color32::from_rgb(0x26, 0x73, 0xFE);
+pub const ACCENT_DEEP: Color32 = Color32::from_rgb(0x14, 0x4B, 0xE9);
+pub const OK: Color32          = Color32::from_rgb(0x65, 0xA3, 0x0D);
+pub const WARN: Color32        = Color32::from_rgb(0xCA, 0x8A, 0x04);
+pub const DANGER: Color32      = Color32::from_rgb(0xA9, 0x10, 0x1D);
+<span class="c">// 圆角：侧栏 24 · 托盘/弹窗 16 · 卡片/按钮 10 · 小按钮 8</span>
+<span class="c">// Visuals 映射：panel_fill=TRAY  window_fill=CARD  extreme_bg_color=TRAY_2</span>
+<span class="c">//              selection.bg_fill=ACCENT(约 11% 透明度)  hyperlink_color=ACCENT</span></pre>
+    </section>
+  </main>
+</div>
+
+<script>
+(function(){
+  var root=document.documentElement;
+  // 主题切换
+  var bl=document.getElementById('themeLight'), bd=document.getElementById('themeDark');
+  function setTheme(d){root.classList.toggle('dark',d);bl.classList.toggle('on',!d);bd.classList.toggle('on',d);}
+  bl.onclick=function(){setTheme(false)}; bd.onclick=function(){setTheme(true)};
+  // 强调色切换
+  var dots=[].slice.call(document.querySelectorAll('#accents .adot'));
+  dots.forEach(function(b){b.onclick=function(){
+    root.style.setProperty('--page-accent',b.dataset.a);root.style.setProperty('--page-accent-deep',b.dataset.d);
+    dots.forEach(function(x){x.classList.toggle('on',x===b)});
+  }});
+  // 分段控件 / 开关 / 按钮组可点
+  document.querySelectorAll('.seg').forEach(function(s){ if(s.closest('.toc'))return;
+    s.querySelectorAll('button').forEach(function(b){b.onclick=function(){s.querySelectorAll('button').forEach(function(x){x.classList.toggle('on',x===b)})}})});
+  document.querySelectorAll('.sw').forEach(function(s){s.onclick=function(){var on=s.classList.toggle('on');s.setAttribute('aria-pressed',on)}});
+  document.querySelectorAll('#live .bgroup button:not(.dis)').forEach(function(b){b.onclick=function(){b.classList.toggle('on')}});
+  // 目录高亮
+  var links=[].slice.call(document.querySelectorAll('.toc a'));
+  var secs=links.map(function(a){return document.querySelector(a.getAttribute('href'))}).filter(Boolean);
+  var obs=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){
+    links.forEach(function(l){l.classList.toggle('active',l.getAttribute('href')==='#'+e.target.id)});}})},{rootMargin:'-10% 0px -80% 0px'});
+  secs.forEach(function(s){obs.observe(s)});
+})();
+</script>
+
+
+</body></html>

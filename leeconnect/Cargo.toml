@@ -29,5 +29,6 @@ windows = { version = "0.58", features = [
 ] }
 tokio-util = "0.7"
 openh264 = "0.9.10"
+image = { version = "0.25", default-features = false, features = ["png"] }
 eframe = { version = "0.37.0", default-features = false, features = ["glow"] }
 egui = "0.37.0"

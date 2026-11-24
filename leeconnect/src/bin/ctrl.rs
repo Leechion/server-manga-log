@@ -15,10 +15,34 @@ const WANT_FRAMES: u32 = 12;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let ca_der = transport::load_ca()?; // trust the host's published CA
+    // --pair <code> [signal]: resolve the host via signaling (LAN discovery, #3),
+    // otherwise connect directly to 127.0.0.1 (local test).
+    let argv: Vec<String> = std::env::args().collect();
+    let mut addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), PORT);
+    let mut ca_der;
+    let mut sni = transport::SNI.to_owned();
+
+    if let Some(pos) = argv.iter().position(|a| a == "--pair") {
+        let code = argv.get(pos + 1).cloned().unwrap_or_default();
+        let signal = argv
+            .get(pos + 2)
+            .cloned()
+            .unwrap_or_else(|| leeconnect::pair::DEFAULT_SIGNAL.to_owned());
+        let mut s = leeconnect::pair::Signaling::open(&signal)?;
+        let serial = leeconnect::pair::gen_serial(leeconnect::pair::DEFAULT_SECRET, "LEE-CTRL-9");
+        s.register("LEE-CTRL-9", &serial, "lee-ctrl", "", &[])?;
+        let (ep, ca) = s.pair_redeem(&code)?;
+        println!("[ctrl] paired via {signal}: host {ep}");
+        addr = ep;
+        ca_der = ca;
+        // connect-by-IP: the leaf carries the host LAN IP as a SAN, so use it for name verification
+        sni = ep.ip().to_string();
+    } else {
+        ca_der = transport::load_ca()?; // trust the host's published CA (local test)
+    }
+
     let client = transport::client_endpoint(&ca_der)?;
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), PORT);
-    let conn = client.connect(addr, transport::SNI)?.await?;
+    let conn = client.connect(addr, &sni)?.await?;
     println!("[ctrl] connected to host");
 
     let (mut send, mut recv) = conn.open_bi().await?;

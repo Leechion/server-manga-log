@@ -208,14 +208,10 @@ fn render_more_menu(app: &mut GuiApp, ctx: &egui::Context, p: &Palette) {
                     .layout(Layout::top_down(Align::Min)),
             );
 
-            // Item 1: 锁定远程电脑
+            // Item 1: 锁定远程电脑 — real SystemAction RPC (host executes LockWorkStation)
             if render_menu_item(&mut menu_ui, p, icons::LOCK, "锁定远程电脑", None, true).clicked() {
-                use leeconnect::input::InputEvent;
-                let _ = app.input_tx.send(InputEvent::Key { vk: 0x5B, down: true }); // Win
-                let _ = app.input_tx.send(InputEvent::Key { vk: 0x4C, down: true }); // L
-                let _ = app.input_tx.send(InputEvent::Key { vk: 0x4C, down: false });
-                let _ = app.input_tx.send(InputEvent::Key { vk: 0x5B, down: false });
-                app.push_toast("安全操作", "已向远端发送系统锁屏指令 (Win+L)");
+                app.send_system_action("lock");
+                app.push_toast("安全操作", "已发送锁屏指令，等待远端回执…");
                 app.show_more_menu = false;
             }
 

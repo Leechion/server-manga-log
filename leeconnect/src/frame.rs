@@ -20,6 +20,8 @@ pub enum FrameType {
     File = 3,
     Control = 4,
     Audio = 5,
+    Cursor = 6,
+    Stats = 7,
 }
 
 impl FrameType {
@@ -31,6 +33,8 @@ impl FrameType {
             3 => Self::File,
             4 => Self::Control,
             5 => Self::Audio,
+            6 => Self::Cursor,
+            7 => Self::Stats,
             _ => return None,
         })
     }

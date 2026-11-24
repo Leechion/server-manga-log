@@ -18,7 +18,6 @@ use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, IDXGIFactory1, IDXGIOutput1, IDXGIOutputDuplication,
     IDXGIResource, DXGI_OUTDUPL_FRAME_INFO, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT,
 };
-use windows::Win32::Graphics::Gdi::{GetDC, GetDeviceCaps, ReleaseDC, HORZRES, VERTRES};
 
 const S_FALSE: HRESULT = HRESULT(0x0000_0001);
 
@@ -45,6 +44,12 @@ pub struct CapturedFrame {
 impl DesktopDup {
     /// Bind to the primary output of the default adapter.
     pub fn new_primary() -> Result<Self> {
+        Self::new_for_output(0)
+    }
+
+    /// Bind to output `idx` (see `monitor_count`). Each output supports exactly
+    /// one live duplication at a time — one DesktopDup per monitor.
+    pub fn new_for_output(idx: usize) -> Result<Self> {
         unsafe {
             // DPI-aware so GDI device caps report physical pixels, matching the
             // DXGI texture size (otherwise scaled desktops mismatch).
@@ -53,8 +58,8 @@ impl DesktopDup {
             let factory: IDXGIFactory1 = CreateDXGIFactory1().context("CreateDXGIFactory1")?;
             let adapter = factory.EnumAdapters1(0).context("EnumAdapters1(0)")?;
             let output = adapter
-                .EnumOutputs(0)
-                .map_err(|_| anyhow::anyhow!("EnumOutputs(0): no display attached"))?;
+                .EnumOutputs(idx as u32)
+                .map_err(|_| anyhow::anyhow!("EnumOutputs({idx}): no such display"))?;
             let output1: IDXGIOutput1 = output.cast().context("IDXGIOutput1 cast")?;
 
             let mut device_opt: Option<ID3D11Device> = None;
@@ -75,7 +80,8 @@ impl DesktopDup {
             let device = device_opt.context("null device")?;
             let context = ctx_opt.context("null context")?;
 
-            let (width, height) = primary_resolution()?;
+            // per-output physical size from the DXGI descriptor (not GDI primary)
+            let (width, height) = output_resolution(&output)?;
 
             let duplication = output1
                 .DuplicateOutput(&device)
@@ -186,27 +192,39 @@ fn copy_staged(
     }
 }
 
-/// Primary desktop resolution via GDI device caps.
-fn primary_resolution() -> Result<(u32, u32)> {
-    unsafe {
-        let hdc = GetDC(None);
-        if hdc.0.is_null() {
-            bail!("GetDC(NULL) failed");
-        }
-        let w = GetDeviceCaps(hdc, HORZRES) as u32;
-        let h = GetDeviceCaps(hdc, VERTRES) as u32;
-        ReleaseDC(None, hdc);
-        if w == 0 || h == 0 {
-            bail!("zero desktop resolution");
-        }
-        Ok((w, h))
-    }
-}
-
 /// Bounding box of dirty rects (M7 refinement: needs GetFrameDirtyRects while the
 /// frame is held; full-frame copy is correct for now).
 fn dirty_box(_info: &DXGI_OUTDUPL_FRAME_INFO) -> Option<(u32, u32, u32, u32)> {
     None
+}
+
+/// Enumerate attached outputs on adapter 0. Returns (count, [desc per index]).
+pub fn monitor_count() -> Result<usize> {
+    unsafe {
+        let factory: IDXGIFactory1 = CreateDXGIFactory1().context("CreateDXGIFactory1")?;
+        let adapter = factory.EnumAdapters1(0).context("EnumAdapters1(0)")?;
+        let mut n = 0usize;
+        loop {
+            match adapter.EnumOutputs(n as u32) {
+                Ok(_) => n += 1,
+                Err(_) => break,
+            }
+        }
+        Ok(n)
+    }
+}
+
+/// Desktop bounds of an output via `GetDesc` (physical pixels, DPI-independent).
+fn output_resolution(output: &windows::Win32::Graphics::Dxgi::IDXGIOutput) -> Result<(u32, u32)> {
+    let desc = unsafe { output.GetDesc() }.context("IDXGIOutput::GetDesc")?;
+    let (w, h) = (
+        desc.DesktopCoordinates.right - desc.DesktopCoordinates.left,
+        desc.DesktopCoordinates.bottom - desc.DesktopCoordinates.top,
+    );
+    if w <= 0 || h <= 0 {
+        bail!("zero output resolution");
+    }
+    Ok((w as u32, h as u32))
 }
 
 #[cfg(test)]

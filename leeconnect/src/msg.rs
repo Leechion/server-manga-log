@@ -23,6 +23,8 @@ pub enum ControlMsg {
     RelayAssign { host: String, port: u16, channel: String },
     /// one-shot system action RPC
     SystemAction { action: String },
+    /// host's result of a system action, echoed back to the controller
+    SystemActionResult { action: String, ok: bool, detail: String },
 }
 
 pub fn encode(m: &ControlMsg) -> String {
@@ -54,5 +56,21 @@ mod tests {
         let caps = Capabilities::from_u64((Capabilities::FILE_TRANS | Capabilities::SCREEN_HDR).to_u64());
         assert!(caps.contains(Capabilities::FILE_TRANS));
         assert!(caps.contains(Capabilities::SCREEN_HDR));
+    }
+
+    #[test]
+    fn system_action_roundtrip() {
+        let m = ControlMsg::SystemAction { action: "reboot:confirm".into() };
+        let d = decode(&encode(&m)).unwrap();
+        assert_eq!(m, d);
+
+        let r = ControlMsg::SystemActionResult {
+            action: "lock".into(),
+            ok: true,
+            detail: "workstation locked".into(),
+        };
+        let s = encode(&r);
+        assert!(s.contains("\"type\":\"system_action_result\""));
+        assert_eq!(decode(&s).unwrap(), r);
     }
 }

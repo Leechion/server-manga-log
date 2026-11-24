@@ -38,54 +38,64 @@
 - **依赖**：无
 - **规模**：L
 
-### 3. 双机 LAN 连接
+### 3. 双机 LAN 连接 ✅（2026-11-24 完成并实测）
 - **UU feature**：`remote_connection_cli` / `remote_connection_cli_v2` / 配对码
-- **模块**：`bin/host.rs` `bin/ctrl.rs` bind 地址参数化；接入 `server/signaling.js`
-- **方案**：
-  - host/ctrl 支持 `--listen <ip:port>` / `--connect <ip:port>`，去掉硬编码 127.0.0.1
-  - 配对码流程：host 向 Node 信令 `pair_create` 拿码 → ctrl `pair_redeem` → 信令交换 QUIC 端点 → 直连（复用 `msg.rs` ControlMsg，type tag 已对齐 signaling.js）
-  - 防火墙：首次运行 `netsh advfirewall` 放行 UDP（或提示用户）
-- **验收**：两台真实机器经配对码建立会话，画面+输入互通
-- **依赖**：#1 渲染（体验）；信令骨架已存在
-- **规模**：M
+- **落地**：`src/pair.rs`（新：tungstenite 信令客户端 + Rust 侧 SERIAL 生成，与 Node keygen
+  **逐字节兼容**交叉单测；RFC4648 base32 向量单测；local_ip UDP 路由探测）+
+  `transport.rs::gen_server_config_extra`（leaf SAN 加本机 LAN IP → 按 IP 连接仍全链名称验证）+
+  `signaling.js` register 携带 endpoint/ca、pair_ok 回传 endpoint+CA +
+  `host.rs --pair [signal]`（注册→打印 6 位码→等待连入）+ `ctrl.rs --pair <code> [signal]`
+- **实测**：本机全链路——信令起 → host 出码 `858431` → ctrl 凭码解析出 `192.168.5.109:44330` →
+  QUIC 握手（IP-SAN 名称验证）→ 12 帧 H.264 解码还原 + 5 输入注入，会话闭环
+- **规模**：M ✅
 
 ---
 
 ## P1 — 功能对齐（远程桌面核心体验）
 
-### 4. 多显示器
+### 4. 多显示器 ✅（2026-11-24 完成并实测）
 - **UU feature**：`multi_screen` / `screen_super`
-- **模块**：`capture.rs` 扩展 `DesktopDup::for_output(idx)`，枚举 `EnumOutputs(0..n)`
-- **方案**：每屏一个 duplication，独立编码流（channel 区分）；ctrl 选屏
-- **验收**：≥2 屏机器可分别采集/切换显示
-- **依赖**：#1
-- **规模**：S
+- **落地**：`capture.rs` 新增 `DesktopDup::new_for_output(idx)` + `monitor_count()`；
+  分辨率改用 `IDXGIOutput::GetDesc` 的 DesktopCoordinates（物理像素，替代 GDI primary_resolution，
+  副屏/竖屏不再错配）；`bin/host.rs` 支持 `--monitor <idx>` 与 `--list-monitors`，
+  ≥2 屏时能力位自动加 `MULTI_SCREEN`
+- **实测**：本机 2 输出（#0 2560×1440、#1 1800×3200 竖屏）；`--monitor 1` 启动后
+  host 报 `desktop #1 1440x2560` 且 H.264 编码正常出帧（竖屏走 DXGI 原生旋转坐标）
+- **待深化**：ctrl/GUI 端运行时切屏（需信令消息 + 每屏独立流），当前为 host 启动参数选屏
+- **规模**：S ✅
 
 ### 5. 光标同步与相对模式
 - **UU feature**：`mouse_cursor` / `smart_mouse` / `simulate_mouse` / `virtual_mouse`
-- **模块**：`input.rs` + `capture.rs`（`GetCursorInfo` 取形状/位置随帧下发）
-- **方案**：
-  - 光标渲染：host 每帧附光标位置+位图，ctrl 叠加绘制（或 host 端已合成，简单）
-  - 相对模式（游戏）：Raw Input（`WM_INPUT` / `RIDEV`）捕获相对位移，`InputEvent::MoveRel` 已支持
-- **验收**：ctrl 看到实时光标；相对模式下 FPS 游戏可转向
-- **依赖**：#1
-- **规模**：M
+- **落地**：`src/cursor.rs`（新，9 字节线格式 + GetCursorInfo poll，4 单测含真实轮询）+
+  `frame.rs::FrameType::Cursor`（协议扩展）+ host 随每视频帧下发光标 + gui/main.rs 接收存 FrameSlot +
+  live.rs 叠加绘制（白十字+黑晕，`show_remote_cursor` 开关控制，坐标按远端分辨率映射）
+- **实测**：三端编译通过；host→ctrl 端到端视频流正常（Cursor 帧零破坏，decoded.png 605KB 真实画面）
+- **相对模式**：`InputEvent::MoveRel` 协议已支持，host 注入端已实现；GUI 端 Raw Input 捕获（游戏转向）待接
+- **待深化**：光标形状位图（GetFramePointerShape 需持有帧时取，M7 增强）；GUI 相对模式开关
+- **规模**：M ✅（位置同步完成，形状/相对模式列入后续）
 
-### 6. 系统动作 RPC
+### 6. 系统动作 RPC ✅（2026-11-24 完成，34/34 单测）
 - **UU feature**：`device_reboot` / `device_shutdown` / `device_lock` / `device_task_manager` / `watch_unlock` / `auto_unlock` / `disconnect_lock`
-- **模块**：`bin/host.rs` 处理 `ControlMsg::SystemAction`（协议已预留）
-- **方案**：`windows` 调用 `ExitWindowsEx`（重启/关机）、`LockWorkStation`（锁屏）、`WTS` 断开锁定；taskmgr 用 `CreateProcess`
-- **验收**：ctrl 触发各动作，host 正确执行（关机/重启需确认保护，测试用锁屏/taskmgr）
-- **依赖**：#3（信令通道）
-- **规模**：S
+- **落地**：`src/system.rs`（新，Action::parse 安全门 + execute）+ `msg.rs::SystemActionResult` 回执 + `bin/host.rs` Control 分支执行回传 + `bin/gui/` ctrl_tx 通道 → toast
+- **动作**：`lock`（LockWorkStation）、`taskmgr`（CREATE_NO_WINDOW）、`logoff/reboot/shutdown`（ExitWindowsEx | EWX_FORCEIFHUNG）
+- **安全门**：破坏性动作必须 `:confirm` 后缀，parse 阶段拒绝（5 单测：安全动词/确认要求/token 严格/未知动词/handle 门先于执行）
+- **GUI**：「锁定远程电脑」菜单从伪造 Win+L 按键改为真实 RPC + 回执 toast；协议往返单测覆盖 `system_action_result` tag
+- **备注**：真 Ctrl+Alt+Del（SendSAS）需 sas.dll + 注册表策略 + 提权，windows-0.58 无绑定 → 保留按键注入近似，列入 P1 后续
+- **验收**：单测 34/34；host/gui 编译通过；端到端锁屏可人工点菜单验证
+- **规模**：S ✅
 
-### 7. 隐私屏
+### 7. 隐私屏 ✅（2026-11-24 完成，4 单测 + 三端编译）
 - **UU feature**：`screen_privacy` / `screen_privacy_enhanced` / `privacy_wallpaper`
-- **模块**：新增 `leeconnect/src/privacy.rs`
-- **方案**：全屏黑窗置顶（`CreateWindowEx` WS_EX_TOPMOST）+ 低级钩子屏蔽本地输入（`SetWindowsHookExW` WH_KEYBOARD_LL/WH_MOUSE_LL，需消息循环）；远端仍可看
-- **验收**：host 物理屏变黑且本地键鼠无效，ctrl 画面不受影响
-- **依赖**：无
-- **规模**：M
+- **落地**：`src/privacy.rs`（新）——全屏虚拟桌面黑窗置顶（CreateWindowExW WS_EX_TOPMOST|TOOLWINDOW，
+  WM_KILLFOCUS 重置顶防抢焦点）+ WH_KEYBOARD_LL/WH_MOUSE_LL 低级钩子；钩子按 `LLMHF_INJECTED`
+  区分：**吞物理输入、放行远端 SendInput**（故 ctrl 画面与控制不受影响）
+- **安全后门**：1.5s 内连按 3 次 Esc 本地解除（`backdoor_fires` 纯函数，防锁死）；
+  `should_block`/`backdoor` 4 个纯逻辑单测覆盖
+- **接线**：host Control 分支 `privacy_on`/`privacy_off` 动词（在 system::handle 前拦截）；
+  GUI live.rs 隐私屏按钮从空转变为真实 RPC + toast
+- **验证边界**：全屏黑屏真实起停未纳入自动化（会短时屏蔽物理输入，避免干扰），以逻辑单测+三端编译为证；
+  人工可经 GUI 按钮实测
+- **规模**：M ✅
 
 ### 8. 虚拟手柄转发
 - **UU feature**：`device_gamepad` / `pad_touch`
@@ -122,12 +132,18 @@
 - **依赖**：#9
 - **规模**：M
 
-### 12. 缩放 / 旋转
+### 12. 缩放 / 旋转 ✅（2026-11-24 完成，62/62 单测）
 - **UU feature**：`screen_zoomscale` / `screen_orientation`
-- **方案**：ctrl 端渲染变换（缩放矩阵 / 旋转），或 host 端 `ChangeDisplaySettingsEx` 改分辨率
-- **验收**：画面可缩放、竖屏旋转正确
-- **依赖**：#1
-- **规模**：S
+- **落地**：`src/view.rs`（新，纯几何：Rotation 枚举 + rotated_size/fit_size +
+  pointer_to_remote 逆映射 + remote_to_pointer 正映射，10 单测含 4 方向正逆往返互逆证明）+
+  `bin/gui/views/live.rs` 接入：Image::rotate 绘制 + 光标正映射 + 指针逆映射回传远端坐标 +
+  `UiConfig`/`GuiApp` 增 rotation_deg/zoom 字段并持久化 ui.json
+- **关键正确性**：旋转下鼠标点选经 `pointer_to_remote` 反旋回源坐标，远端命中位置准确；
+  光标叠加经 `remote_to_pointer` 正旋，与画面同步（往返单测 `forward_inverse_roundtrip_all_rotations` 锁定）
+- **实测**：三端编译通过；host→ctrl 端到端 12 帧解码还原正常（旋转逻辑在纯函数层已充分单测，
+  绘制路径编译验证；GUI 交互旋转待人工点选确认）
+- **解锁**：#15 跟随模式（依赖本项的分辨率/缩放基建）
+- **规模**：S ✅
 
 ---
 
@@ -155,12 +171,15 @@
 - **依赖**：#12
 - **规模**：S
 
-### 16. 延迟归因
+### 16. 延迟归因 ✅（2026-11-24 完成，45/45 单测）
 - **UU feature**：`delay_reason`
-- **方案**：采集/编码/传输/解码/渲染分段打时间戳，控制帧回传统计，ctrl 显示各段耗时
-- **验收**：UI 显示分段延迟分解
-- **依赖**：#1
-- **规模**：S
+- **落地**：`src/stats.rs`（新，8 字节线格式 capture_us/encode_us，3 单测）+ `frame.rs::FrameType::Stats`
+  + host 视频泵内实测 capture/encode 耗时随流下发 + gui/main.rs 接收存 FrameSlot 并实测本地 decode 耗时
+  + `app.rs` 顶栏 `status_sub` 由**硬编码假值 "18ms"** 改为真实五段分解：
+  `采集 x.xms · 编码 x.xms · 网络 xms(QUIC RTT) · 解码 x.xms · 合计 xms`
+- **实测**：三端编译通过；host→ctrl 端到端视频流正常（Stats 帧零破坏，12 帧解码还原）
+- **设计**：不共享绝对时钟，每段均为单机耗时差值，可安全相加
+- **规模**：S ✅
 
 ### 17. 批注
 - **UU feature**：`annotation_v1` / `annotation_v2`
@@ -212,10 +231,13 @@ cd E:\CODE\server-manga-log\leeconnect
 | 文件传输 | `file.rs` | 1.25MB 逐字节比对通过 |
 | 剪贴板同步 | `clipboard.rs` | 真实写后读回验证 |
 | 端口映射 | `portmap.rs` | TCP-over-QUIC echo 往返 |
-| **UU 式 GUI 客户端** | `bin/gui.rs` | egui/eframe，实时远控画面+设备导航+工具栏+中文，实测截图 |
+| **UU 式 GUI 客户端** | `bin/gui/`（模块化） | macOS 风重构，实时远控画面+设备导航+工具栏+CJK，实测截图 |
 | 双进程会话 | `bin/{host,ctrl}.rs` | 看+控端到端 |
+| **系统动作 RPC** | `system.rs` + `SystemActionResult` | lock/taskmgr/logoff/reboot/shutdown，`:confirm` 安全门，5 单测 |
+| **多显示器** | `capture.rs::new_for_output` + `--monitor` | 本机 2 屏实测（含 1440×2560 竖屏 H.264） |
+| **光标同步** | `cursor.rs` + `FrameType::Cursor` | 随帧下发+GUI 叠加十字，4 单测+端到端 |
 
-**测试**：32/32 全绿。核心"看 + 控 + 传"已闭环可用。
+**测试**：42/42 全绿（含真实桌面采集/H.264 往返/剪贴板/文件/端口映射/光标轮询）。
 
 ---
 

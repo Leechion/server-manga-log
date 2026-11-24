@@ -18,7 +18,7 @@ use leeconnect::msg::{self, ControlMsg};
 use leeconnect::transport;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -31,6 +31,13 @@ pub struct FrameSlot {
     pub h: u32,
     pub rgba: Vec<u8>,
     pub seq: u64,
+    /// remote cursor state (position in remote pixels), streamed alongside video
+    pub cursor: Option<(i32, i32, bool)>,
+    /// host-side segment timings from the newest Stats frame (microseconds)
+    pub host_capture_us: u32,
+    pub host_encode_us: u32,
+    /// controller-side decode duration of the newest frame (microseconds)
+    pub decode_us: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -72,6 +79,8 @@ pub struct Session {
     pub stop: Arc<AtomicBool>,
     pub bytes_rx: Arc<AtomicU64>,
     pub rtt_ms: Arc<AtomicU64>,
+    /// pending system-action results echoed by the host (run thread -> UI toast)
+    pub sys_results: Arc<Mutex<Vec<(String, bool, String)>>>,
 }
 
 impl Session {
@@ -87,6 +96,8 @@ impl Session {
         bytes_rx: Arc<AtomicU64>,
         rtt_ms: Arc<AtomicU64>,
         input_rx: Receiver<InputEvent>,
+        ctrl_rx: Receiver<ControlMsg>,
+        sys_results: Arc<Mutex<Vec<(String, bool, String)>>>,
     ) {
         std::thread::spawn(move || {
             let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
@@ -98,7 +109,7 @@ impl Session {
                 }
             };
             if let Err(e) = rt.block_on(run(
-                host, slot, status.clone(), caps, hw, hh, stop, bytes_rx, rtt_ms, input_rx,
+                host, slot, status.clone(), caps, hw, hh, stop, bytes_rx, rtt_ms, input_rx, ctrl_rx, sys_results,
             )) {
                 let err_msg = e.to_string();
                 eprintln!("[gui-session] ended: {err_msg}");
@@ -119,6 +130,8 @@ async fn run(
     bytes_rx: Arc<AtomicU64>,
     rtt_ms: Arc<AtomicU64>,
     input_rx: Receiver<InputEvent>,
+    ctrl_rx: Receiver<ControlMsg>,
+    sys_results: Arc<Mutex<Vec<(String, bool, String)>>>,
 ) -> Result<()> {
     // 1. Stage: Handshake
     let t0 = Instant::now();
@@ -208,6 +221,7 @@ async fn run(
                         hw.store(ef.width as u64, Ordering::Relaxed);
                         hh.store(ef.height as u64, Ordering::Relaxed);
                         let mut got_picture = false;
+                        let t_dec = Instant::now();
 
                         if ef.format == PixelFormat::H264 {
                             if let Some(pic) = decoder.decode(&ef)? {
@@ -216,6 +230,7 @@ async fn run(
                                 s.h = pic.height;
                                 bgra_to_rgba_into(&pic.pixels, &mut s.rgba);
                                 s.seq += 1;
+                                s.decode_us = t_dec.elapsed().as_micros().min(u32::MAX as u128) as u32;
                                 got_picture = true;
                             }
                         } else if ef.format == PixelFormat::Bgra8 {
@@ -224,6 +239,7 @@ async fn run(
                             s.h = ef.height;
                             bgra_to_rgba_into(&ef.data, &mut s.rgba);
                             s.seq += 1;
+                            s.decode_us = t_dec.elapsed().as_micros().min(u32::MAX as u128) as u32;
                             got_picture = true;
                         }
 
@@ -232,10 +248,28 @@ async fn run(
                             *status.lock().unwrap() = Status::Live;
                         }
                     }
+                    FrameType::Cursor => {
+                        if let Ok(cur) = leeconnect::cursor::CursorState::decode(&f.payload) {
+                            slot.lock().unwrap().cursor = Some((cur.x, cur.y, cur.visible));
+                        }
+                    }
+                    FrameType::Stats => {
+                        if let Ok(st) = leeconnect::stats::Stats::decode(&f.payload) {
+                            let mut s = slot.lock().unwrap();
+                            s.host_capture_us = st.capture_us;
+                            s.host_encode_us = st.encode_us;
+                        }
+                    }
                     FrameType::Control => {
                         let txt = String::from_utf8_lossy(&f.payload).to_string();
-                        if let Ok(ControlMsg::CapabilityExchange { caps: c }) = msg::decode(&txt) {
-                            *caps.lock().unwrap() = Some(Capabilities::from_u64(c));
+                        match msg::decode(&txt) {
+                            Ok(ControlMsg::CapabilityExchange { caps: c }) => {
+                                *caps.lock().unwrap() = Some(Capabilities::from_u64(c));
+                            }
+                            Ok(ControlMsg::SystemActionResult { action, ok, detail }) => {
+                                sys_results.lock().unwrap().push((action, ok, detail));
+                            }
+                            _ => {}
                         }
                     }
                     _ => {}
@@ -244,6 +278,14 @@ async fn run(
             _ = tick.tick() => {
                 while let Ok(ev) = input_rx.try_recv() {
                     let fr = Frame::new(FrameType::Input, 1, seq, encode_input(ev));
+                    seq = seq.wrapping_add(1);
+                    if transport::write_frame(&mut send, &fr).await.is_err() {
+                        break;
+                    }
+                }
+                // control-plane messages (system actions, etc.) from the UI thread
+                while let Ok(cm) = ctrl_rx.try_recv() {
+                    let fr = Frame::new(FrameType::Control, 0, seq, msg::encode(&cm).into_bytes());
                     seq = seq.wrapping_add(1);
                     if transport::write_frame(&mut send, &fr).await.is_err() {
                         break;
@@ -305,6 +347,8 @@ fn main() -> eframe::Result {
     let bytes_rx = Arc::new(AtomicU64::new(0));
     let rtt_ms = Arc::new(AtomicU64::new(0));
     let (input_tx, input_rx) = std::sync::mpsc::channel::<InputEvent>();
+    let (ctrl_tx, ctrl_rx) = std::sync::mpsc::channel::<ControlMsg>();
+    let sys_results: Arc<Mutex<Vec<(String, bool, String)>>> = Arc::new(Mutex::new(Vec::new()));
 
     if mode == app::AppMode::Normal && should_auto_connect {
         Session::spawn(
@@ -318,6 +362,8 @@ fn main() -> eframe::Result {
             bytes_rx.clone(),
             rtt_ms.clone(),
             input_rx,
+            ctrl_rx,
+            sys_results.clone(),
         );
     }
 
@@ -330,6 +376,7 @@ fn main() -> eframe::Result {
         stop,
         bytes_rx,
         rtt_ms,
+        sys_results,
     };
 
     let opts = eframe::NativeOptions {
@@ -343,6 +390,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "LeeConnect",
         opts,
-        Box::new(move |cc| Ok(Box::new(GuiApp::new(cc, sess, input_tx, host, mode)) as Box<dyn eframe::App>)),
+        Box::new(move |cc| Ok(Box::new(GuiApp::new(cc, sess, input_tx, ctrl_tx, host, mode)) as Box<dyn eframe::App>)),
     )
 }

@@ -26,9 +26,15 @@ windows = { version = "0.58", features = [
   "Win32_System_DataExchange",
   "Win32_System_Memory",
   "Win32_System_Ole",
+  "Win32_System_Shutdown",
+  "Win32_System_Threading",
+  "Win32_System_LibraryLoader",
 ] }
 tokio-util = "0.7"
 openh264 = "0.9.10"
 image = { version = "0.25", default-features = false, features = ["png"] }
 eframe = { version = "0.37.0", default-features = false, features = ["glow"] }
 egui = "0.37.0"
+tungstenite = "0.30.0"
+hmac = "0.12"
+sha2 = "0.10"

@@ -36,28 +36,78 @@ pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
         }
     };
 
-    // Calculate aspect-fit video rectangle inside bg_rect
-    let scale = (bg_rect.width() / hw as f32).min(bg_rect.height() / hh as f32);
-    let disp = vec2((hw as f32 * scale).max(10.0), (hh as f32 * scale).max(10.0));
+    // Aspect-fit video rectangle with rotation + zoom (UU: screen_orientation / screen_zoomscale)
+    let rot = leeconnect::view::Rotation::from_deg(app.rotation_deg);
+    let (rw, rh) = leeconnect::view::rotated_size(hw as f32, hh as f32, rot);
+    let (dw, dh) = leeconnect::view::fit_size(bg_rect.width(), bg_rect.height(), hw as f32, hh as f32, rot, app.zoom);
+    let disp = vec2(dw.max(10.0), dh.max(10.0));
     let screen_rect = Rect::from_center_size(bg_rect.center(), disp);
 
-    // Draw remote desktop image
-    ui.put(
-        screen_rect,
-        egui::Image::new(tex)
-            .max_size(disp)
-            .corner_radius(0),
-    );
+    // Draw remote desktop image (rotated about its UV center when needed)
+    let img = egui::Image::new(tex).max_size(vec2(rw.max(10.0), rh.max(10.0)));
+    let img = if rot.deg() == 0 {
+        img
+    } else {
+        img.rotate(rot.deg() as f32 * std::f32::consts::TAU / 360.0, egui::Vec2::splat(0.5))
+    };
+    ui.put(screen_rect, img);
+
+    // Overlay the remote cursor when enabled (UU feature: mouse_cursor)
+    if app.show_remote_cursor {
+        let cur = app.slot.lock().unwrap().cursor;
+        if let Some((cx, cy, visible)) = cur {
+            if visible && hw > 0 && hh > 0 {
+                // forward-map source cursor coords through rotation into the drawn rect
+                let (px, py) = leeconnect::view::remote_to_pointer(
+                    cx as f32, cy as f32,
+                    screen_rect.min.x, screen_rect.min.y,
+                    screen_rect.width(), screen_rect.height(),
+                    hw as f32, hh as f32, rot,
+                );
+                if Rect::from_min_size(screen_rect.min, disp).contains(pos2(px, py)) {
+                    let painter = ui.painter();
+                    // white crosshair with dark halo so it reads on any background
+                    let arm = 9.0;
+                    let halo = Color32::from_black_alpha(180);
+                    let line = Color32::WHITE;
+                    for (dx, dy) in [(0.5, 0.5), (-0.5, -0.5)] {
+                        painter.line_segment(
+                            [pos2(px - arm + dx, py + dy), pos2(px + arm + dx, py + dy)],
+                            Stroke::new(1.5, halo),
+                        );
+                        painter.line_segment(
+                            [pos2(px + dx, py - arm + dy), pos2(px + dx, py + arm + dy)],
+                            Stroke::new(1.5, halo),
+                        );
+                    }
+                    painter.line_segment(
+                        [pos2(px - arm, py), pos2(px + arm, py)],
+                        Stroke::new(1.0, line),
+                    );
+                    painter.line_segment(
+                        [pos2(px, py - arm), pos2(px, py + arm)],
+                        Stroke::new(1.0, line),
+                    );
+                    painter.circle_filled(pos2(px, py), 1.5, line);
+                }
+            }
+        }
+    }
 
     // Remote mouse capture on screen_rect
     let input_id = ui.scope_id().with("remote-desktop-input");
     let resp = ui.interact(screen_rect, input_id, Sense::click_and_drag());
     if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
         if screen_rect.contains(pos) && screen_rect.width() > 1.0 && screen_rect.height() > 1.0 {
-            let rx = ((pos.x - screen_rect.min.x) / screen_rect.width() * hw as f32)
-                .clamp(0.0, hw as f32 - 1.0) as u32;
-            let ry = ((pos.y - screen_rect.min.y) / screen_rect.height() * hh as f32)
-                .clamp(0.0, hh as f32 - 1.0) as u32;
+            // inverse-map pointer through rotation+zoom back to remote source coords
+            let (rx_f, ry_f) = leeconnect::view::pointer_to_remote(
+                pos.x, pos.y,
+                screen_rect.min.x, screen_rect.min.y,
+                screen_rect.width(), screen_rect.height(),
+                hw as f32, hh as f32, rot,
+            );
+            let rx = rx_f.clamp(0.0, hw as f32 - 1.0) as u32;
+            let ry = ry_f.clamp(0.0, hh as f32 - 1.0) as u32;
             let _ = app.input_tx.send(InputEvent::MoveAbs { x: rx, y: ry });
 
             if resp.clicked() {
@@ -187,11 +237,13 @@ pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
             app.push_toast("显示器信息", &msg);
         }
 
-        // 5. Privacy Screen
+        // 5. Privacy Screen — real RPC to host (engines black cover + physical-input hooks there)
         let privacy_active = app.privacy_screen_active;
         if hud_button(&mut hud_ui, &p, icons::EYE_OFF, privacy_active, false, "隐私屏").clicked() {
-            app.privacy_screen_active = !app.privacy_screen_active;
-            app.push_toast("隐私屏", if app.privacy_screen_active { "隐私屏已开启，远端屏幕已黑屏" } else { "隐私屏已关闭" });
+            let verb = if privacy_active { "privacy_off" } else { "privacy_on" };
+            app.send_system_action(verb);
+            app.privacy_screen_active = !privacy_active;
+            app.push_toast("隐私屏", if app.privacy_screen_active { "已发送开启指令，远端物理屏将黑屏屏蔽（连按3次Esc本地解除）" } else { "已发送关闭指令" });
         }
 
         // 6. More Menu (…)

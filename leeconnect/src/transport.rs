@@ -15,6 +15,13 @@ pub const SNI: &str = "localhost";
 
 /// Generate a throwaway CA + server leaf. Returns (server_config, ca_cert_der).
 pub fn gen_server_config() -> Result<(ServerConfig, Vec<u8>)> {
+    gen_server_config_extra(&[])
+}
+
+/// Like `gen_server_config`, but the leaf also carries extra SANs (rcgen treats
+/// IP-shaped strings as IpAddress SANs), so a controller can connect to the
+/// host's LAN address with full chain + name verification.
+pub fn gen_server_config_extra(extra_sans: &[String]) -> Result<(ServerConfig, Vec<u8>)> {
     use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, KeyPair, KeyUsagePurpose};
 
     // CA
@@ -27,8 +34,10 @@ pub fn gen_server_config() -> Result<(ServerConfig, Vec<u8>)> {
     let ca_kp = KeyPair::generate().context("ca keypair")?;
     let ca_cert = ca_params.self_signed(&ca_kp).context("ca self-sign")?;
 
-    // leaf signed by CA, DNS SAN localhost
-    let leaf_params = CertificateParams::new(vec![SNI.into()]).context("leaf params")?;
+    // leaf signed by CA, DNS SAN localhost (+ extra LAN IPs for cross-machine)
+    let mut sans = vec![SNI.to_string()];
+    sans.extend(extra_sans.iter().cloned());
+    let leaf_params = CertificateParams::new(sans).context("leaf params")?;
     let leaf_kp = KeyPair::generate().context("leaf keypair")?;
     let leaf_cert = leaf_params
         .signed_by(&leaf_kp, &ca_cert, &ca_kp)
@@ -54,7 +63,12 @@ pub fn ca_file() -> std::path::PathBuf {
 
 /// Host: generate config and persist the CA cert for the controller to trust.
 pub fn gen_server_config_persisted() -> Result<(ServerConfig, Vec<u8>)> {
-    let (sc, ca_der) = gen_server_config()?;
+    gen_server_config_persisted_extra(&[])
+}
+
+/// Same, with extra leaf SANs (LAN IPs) for cross-machine pairing.
+pub fn gen_server_config_persisted_extra(extra_sans: &[String]) -> Result<(ServerConfig, Vec<u8>)> {
+    let (sc, ca_der) = gen_server_config_extra(extra_sans)?;
     if let Some(dir) = ca_file().parent() {
         std::fs::create_dir_all(dir).ok();
     }

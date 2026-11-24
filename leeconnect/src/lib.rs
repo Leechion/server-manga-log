@@ -4,14 +4,20 @@
 pub mod capabilities;
 pub mod capture;
 pub mod clipboard;
+pub mod cursor;
 pub mod decoder;
 pub mod encoder;
 pub mod file;
 pub mod frame;
 pub mod input;
 pub mod msg;
+pub mod pair;
 pub mod portmap;
+pub mod privacy;
+pub mod stats;
+pub mod system;
 pub mod transport;
+pub mod view;
 
 pub use capabilities::Capabilities;
 pub use frame::Frame;

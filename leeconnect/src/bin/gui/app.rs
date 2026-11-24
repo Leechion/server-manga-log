@@ -7,6 +7,7 @@ pub use super::{FrameSlot, Session, Stage, Status};
 use egui::{pos2, vec2, Align, Color32, CornerRadius, Layout, Rect, Sense, Stroke};
 use leeconnect::capabilities::Capabilities;
 use leeconnect::input::InputEvent;
+use leeconnect::msg::ControlMsg;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -46,10 +47,18 @@ pub struct UiConfig {
     pub play_remote_audio: bool,
     #[serde(default = "default_true")]
     pub show_remote_cursor: bool,
+    #[serde(default)]
+    pub rotation_deg: i32,
+    #[serde(default = "default_zoom")]
+    pub zoom: f32,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_zoom() -> f32 {
+    1.0
 }
 
 impl Default for UiConfig {
@@ -61,6 +70,8 @@ impl Default for UiConfig {
             sync_clipboard: true,
             play_remote_audio: false,
             show_remote_cursor: true,
+            rotation_deg: 0,
+            zoom: 1.0,
         }
     }
 }
@@ -77,6 +88,8 @@ pub struct GuiApp {
     pub bytes_rx: Arc<AtomicU64>,
     pub rtt_ms: Arc<AtomicU64>,
     pub input_tx: Sender<InputEvent>,
+    pub ctrl_tx: Sender<ControlMsg>,
+    pub sys_results: Arc<Mutex<Vec<(String, bool, String)>>>,
     pub tex: Option<egui::TextureHandle>,
     pub last_seq: u64,
     pub selected_device: usize,
@@ -97,6 +110,8 @@ pub struct GuiApp {
     pub play_remote_audio: bool,
     pub show_remote_cursor: bool,
     pub privacy_screen_active: bool,
+    pub rotation_deg: i32,
+    pub zoom: f32,
     pub last_mouse_activity: Instant,
     pub session_start: Instant,
     pub toasts: Vec<Toast>,
@@ -110,6 +125,7 @@ impl GuiApp {
         cc: &eframe::CreationContext<'_>,
         sess: Session,
         input_tx: Sender<InputEvent>,
+        ctrl_tx: Sender<ControlMsg>,
         host: SocketAddr,
         mode: AppMode,
     ) -> Self {
@@ -130,7 +146,9 @@ impl GuiApp {
             stop: sess.stop,
             bytes_rx: sess.bytes_rx,
             rtt_ms: sess.rtt_ms,
+            sys_results: sess.sys_results,
             input_tx,
+            ctrl_tx,
             tex: None,
             last_seq: 0,
             selected_device: 1, // Default selected is "工位电脑"
@@ -170,6 +188,8 @@ impl GuiApp {
             play_remote_audio: cfg.play_remote_audio,
             show_remote_cursor: cfg.show_remote_cursor,
             privacy_screen_active: false,
+            rotation_deg: cfg.rotation_deg,
+            zoom: cfg.zoom,
             last_mouse_activity: Instant::now(),
             session_start: Instant::now(),
             toasts: Vec::new(),
@@ -232,6 +252,26 @@ impl GuiApp {
         });
     }
 
+    /// Send a system-action RPC to the host (e.g. "lock", "taskmgr", "reboot:confirm").
+    pub fn send_system_action(&mut self, action: &str) {
+        let _ = self.ctrl_tx.send(ControlMsg::SystemAction { action: action.to_owned() });
+    }
+
+    /// Drain host system-action results into toasts. Call once per UI frame.
+    pub fn drain_sys_results(&mut self) {
+        let pending = {
+            let mut q = self.sys_results.lock().unwrap();
+            if q.is_empty() {
+                return;
+            }
+            std::mem::take(&mut *q)
+        };
+        for (action, ok, detail) in pending {
+            let title = if ok { "系统操作" } else { "操作失败" };
+            self.push_toast(title, &format!("{action} → {detail}"));
+        }
+    }
+
     pub fn toggle_theme(&mut self, ctx: &egui::Context) {
         self.palette = if self.palette.dark { theme::LIGHT } else { theme::DARK };
         theme::apply(ctx, &self.palette);
@@ -265,6 +305,10 @@ impl GuiApp {
 
         let (tx, input_rx) = std::sync::mpsc::channel::<InputEvent>();
         self.input_tx = tx;
+        // fresh control channel per session (the old receiver was consumed by the prior thread)
+        let (ctx_tx, ctrl_rx) = std::sync::mpsc::channel::<ControlMsg>();
+        self.ctrl_tx = ctx_tx;
+        self.sys_results.lock().unwrap().clear();
 
         Session::spawn(
             target_addr,
@@ -277,6 +321,8 @@ impl GuiApp {
             self.bytes_rx.clone(),
             self.rtt_ms.clone(),
             input_rx,
+            ctrl_rx,
+            self.sys_results.clone(),
         );
     }
 
@@ -305,6 +351,8 @@ impl GuiApp {
                 sync_clipboard: self.sync_clipboard,
                 play_remote_audio: self.play_remote_audio,
                 show_remote_cursor: self.show_remote_cursor,
+                rotation_deg: self.rotation_deg,
+                zoom: self.zoom,
             };
             if let Ok(json) = serde_json::to_string_pretty(&cfg) {
                 let _ = std::fs::write(path, json);
@@ -338,6 +386,7 @@ impl eframe::App for GuiApp {
         }
 
         self.sync_texture(ui.ctx());
+        self.drain_sys_results();
 
         // Unified macOS App Shell
         self.render_app_shell(ui);
@@ -368,18 +417,33 @@ impl GuiApp {
             let dev_name = self.devices.get(self.selected_device).map(|d| d.name.as_str()).unwrap_or("工位电脑");
             let is_online = self.devices.get(self.selected_device).map_or(false, |d| d.online);
             let status_sub = if is_live {
-                "已连接 · 局域网直连 · 18ms"
+                // live latency breakdown (UU feature: delay_reason):
+                // host capture+encode, wire RTT, local decode — all measured, no fakes.
+                let (cap_us, enc_us, dec_us) = {
+                    let s = self.slot.lock().unwrap();
+                    (s.host_capture_us, s.host_encode_us, s.decode_us)
+                };
+                let rtt = self.rtt_ms.load(Ordering::Relaxed);
+                let total = cap_us as f64 / 1000.0 + enc_us as f64 / 1000.0 + rtt as f64 + dec_us as f64 / 1000.0;
+                format!(
+                    "已连接 · 采集 {:.1}ms · 编码 {:.1}ms · 网络 {}ms · 解码 {:.1}ms · 合计 {:.0}ms",
+                    cap_us as f64 / 1000.0,
+                    enc_us as f64 / 1000.0,
+                    rtt,
+                    dec_us as f64 / 1000.0,
+                    total
+                )
             } else if is_online {
-                "在线 · 局域网 · Windows 11"
+                "在线 · 局域网 · Windows 11".to_owned()
             } else {
-                "离线"
+                "离线".to_owned()
             };
 
             let action = shell::render_toolbar(
                 ui,
                 &p,
                 dev_name,
-                status_sub,
+                &status_sub,
                 is_online || is_live,
                 is_live,
                 self.sidebar_open,

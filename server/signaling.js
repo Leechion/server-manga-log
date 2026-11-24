@@ -38,7 +38,7 @@ wss.on('connection', (ws, req) => {
       case 'register': { // 被控端上线：DEVICE_ID + SERIAL 本地校验
         if (!verifySerial(m.serial, m.device_id)) return send(ws, 'auth_fail', {});
         dev = m.device_id;
-        devices.set(dev, { ws, name: m.name || 'unnamed', serial: m.serial, last_seen: Date.now() });
+        devices.set(dev, { ws, name: m.name || 'unnamed', serial: m.serial, last_seen: Date.now(), endpoint: m.endpoint || null, ca: m.ca || null });
         return send(ws, 'registered', { device_id: dev });
       }
       case 'pair_create': { // 被控端生成配对码
@@ -55,7 +55,8 @@ wss.on('connection', (ws, req) => {
         if (!t || t.ws.readyState !== 1) return send(ws, 'pair_fail', { reason: 'offline' });
         send(t.ws, 'pair_open', { controller: p.initiator, features: entitlements(t.serial, p.target).features });
         ws._peer = p.target; t.ws._peer = dev;
-        return send(ws, 'pair_ok', { target: p.target });
+        // hand the controller the host's QUIC endpoint + CA root for a direct connection
+        return send(ws, 'pair_ok', { target: p.target, endpoint: t.endpoint || null, ca: t.ca || null });
       }
       case 'offer': case 'answer': case 'ice': { // SDP/ICE 透传给对端
         const t = devices.get(ws._peer);

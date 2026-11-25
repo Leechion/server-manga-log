@@ -13,7 +13,9 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAPPED_SUBRESOURCE,
     D3D11_MAP_READ, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
 };
-use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_SAMPLE_DESC,
+};
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, IDXGIFactory1, IDXGIOutput1, IDXGIOutputDuplication,
     IDXGIResource, DXGI_OUTDUPL_FRAME_INFO, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT,
@@ -27,6 +29,7 @@ pub struct DesktopDup {
     duplication: Option<IDXGIOutputDuplication>,
     width: u32,
     height: u32,
+    is_hdr: bool,
 }
 
 #[derive(Clone)]
@@ -87,7 +90,14 @@ impl DesktopDup {
                 .DuplicateOutput(&device)
                 .map_err(|e| anyhow::anyhow!("DuplicateOutput failed ({e}); needs an interactive desktop session, not session-0/service context"))?;
 
-            let mut this = Self { device, context, duplication: Some(duplication), width, height };
+            let mut this = Self {
+                device,
+                context,
+                duplication: Some(duplication),
+                width,
+                height,
+                is_hdr: false,
+            };
             this.prime()?; // flush the initial empty/black frame a fresh duplication returns
             Ok(this)
         }
@@ -105,6 +115,10 @@ impl DesktopDup {
 
     pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+
+    pub fn is_hdr(&self) -> bool {
+        self.is_hdr
     }
 
     /// Acquire the next frame. `timeout_ms == 0` polls; returns `Ok(None)` when
@@ -129,32 +143,40 @@ impl DesktopDup {
             // clone the COM handles (cheap refcount) so we don't double-borrow self
             let device = self.device.clone();
             let context = self.context.clone();
-            let res = copy_staged(&device, &context, &info, resource.context("null resource")?);
+            let (res, hdr) = copy_staged(&device, &context, &info, resource.context("null resource")?)?;
+            self.is_hdr = hdr;
             dup.ReleaseFrame().ok();
-            Ok(Some(res?))
+            Ok(Some(res))
         }
     }
 }
 
 /// Copy the acquired desktop texture into a CPU-readable staging texture.
+/// Supports both standard BGRA8 and 10-bit HDR (`DXGI_FORMAT_R10G10B10A2_UNORM`,
+/// Reinhard tone-mapped to BGRA8 when needed for SDR viewers).
 fn copy_staged(
     device: &ID3D11Device,
     context: &ID3D11DeviceContext,
     info: &DXGI_OUTDUPL_FRAME_INFO,
     resource: IDXGIResource,
-) -> Result<CapturedFrame> {
+) -> Result<(CapturedFrame, bool)> {
     unsafe {
         let tex: ID3D11Texture2D = resource.cast().context("IDXGIResource -> texture")?;
         let mut desc = D3D11_TEXTURE2D_DESC::default();
         tex.GetDesc(&mut desc);
         let (w, h) = (desc.Width, desc.Height);
+        let src_hdr = desc.Format == DXGI_FORMAT_R10G10B10A2_UNORM;
 
         let mut sd = D3D11_TEXTURE2D_DESC::default();
         sd.Width = w;
         sd.Height = h;
         sd.MipLevels = 1;
         sd.ArraySize = 1;
-        sd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        sd.Format = if src_hdr {
+            DXGI_FORMAT_R10G10B10A2_UNORM
+        } else {
+            DXGI_FORMAT_B8G8R8A8_UNORM
+        };
         sd.SampleDesc = DXGI_SAMPLE_DESC { Count: 1, Quality: 0 };
         sd.Usage = D3D11_USAGE_STAGING;
         sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
@@ -182,13 +204,70 @@ fn copy_staged(
         }
         context.Unmap(&staged, 0);
 
-        Ok(CapturedFrame {
-            width: w,
-            height: h,
-            stride: stride as u32,
-            pixels,
-            dirty: dirty_box(info),
-        })
+        if src_hdr {
+            r10g10b10a2_to_bgra8_inplace(&mut pixels, stride, w as usize, h as usize);
+        }
+
+        Ok((
+            CapturedFrame {
+                width: w,
+                height: h,
+                stride: stride as u32,
+                pixels,
+                dirty: dirty_box(info),
+            },
+            src_hdr,
+        ))
+    }
+}
+
+/// Convert packed 10-bit RGB (`R10G10B10A2_UNORM`) to BGRA8 using simple Reinhard
+/// highlight compression so HDR desktops render cleanly on SDR endpoints.
+pub fn r10g10b10a2_to_bgra8_inplace(buf: &mut [u8], stride: usize, w: usize, h: usize) {
+    for y in 0..h {
+        let row = &mut buf[y * stride..y * stride + w * 4];
+        for px in row.chunks_exact_mut(4) {
+            let word = u32::from_le_bytes([px[0], px[1], px[2], px[3]]);
+            let r10 = (word & 0x3FF) as f32 / 1023.0;
+            let g10 = ((word >> 10) & 0x3FF) as f32 / 1023.0;
+            let b10 = ((word >> 20) & 0x3FF) as f32 / 1023.0;
+            let tm = |v: f32| -> u8 {
+                let mapped = (v * 1.35) / (1.0 + v * 0.35);
+                (mapped.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+            };
+            px[0] = tm(b10);
+            px[1] = tm(g10);
+            px[2] = tm(r10);
+            px[3] = 255;
+        }
+    }
+}
+
+/// Enumerate attached outputs on adapter 0 with geometry and primary flag.
+pub fn enumerate_monitors() -> Result<Vec<crate::msg::MonitorDesc>> {
+    unsafe {
+        let factory: IDXGIFactory1 = CreateDXGIFactory1().context("CreateDXGIFactory1")?;
+        let adapter = factory.EnumAdapters1(0).context("EnumAdapters1(0)")?;
+        let mut list = Vec::new();
+        let mut idx = 0usize;
+        while let Ok(output) = adapter.EnumOutputs(idx as u32) {
+            if let Ok(desc) = output.GetDesc() {
+                let w = (desc.DesktopCoordinates.right - desc.DesktopCoordinates.left).max(0) as u32;
+                let h = (desc.DesktopCoordinates.bottom - desc.DesktopCoordinates.top).max(0) as u32;
+                let end = desc.DeviceName.iter().position(|&c| c == 0).unwrap_or(desc.DeviceName.len());
+                let name = String::from_utf16_lossy(&desc.DeviceName[..end]);
+                let is_primary = desc.DesktopCoordinates.left == 0 && desc.DesktopCoordinates.top == 0;
+                list.push(crate::msg::MonitorDesc {
+                    index: idx,
+                    width: w,
+                    height: h,
+                    is_primary,
+                    name,
+                });
+            }
+            idx += 1;
+        }
+        Ok(list)
     }
 }
 
@@ -247,6 +326,21 @@ mod tests {
             assert_eq!(f.height, h);
             assert!(f.pixels.len() >= f.stride as usize * h as usize);
         }
+    }
+
+    #[test]
+    fn hdr_r10g10b10a2_tonemap_preserves_primaries() {
+        // Pure red (1023, 0, 0) and pure white (1023, 1023, 1023)
+        let r_word: u32 = 1023;
+        let w_word: u32 = 1023 | (1023 << 10) | (1023 << 20) | (3 << 30);
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&r_word.to_le_bytes());
+        buf.extend_from_slice(&w_word.to_le_bytes());
+        r10g10b10a2_to_bgra8_inplace(&mut buf, 8, 2, 1);
+        // Pixel 0: BGRA -> B=0, G=0, R=255, A=255
+        assert_eq!(&buf[0..4], &[0, 0, 255, 255]);
+        // Pixel 1: BGRA -> white
+        assert_eq!(&buf[4..8], &[255, 255, 255, 255]);
     }
 }
 

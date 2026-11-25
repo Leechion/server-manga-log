@@ -1,11 +1,15 @@
 use super::super::app::GuiApp;
 use super::super::icons;
 use super::super::theme;
-use super::super::widgets::hud_button;
+use super::super::widgets::{hud_button, push_button, ButtonKind};
 use egui::{
-    pos2, vec2, Align, Color32, CornerRadius, Layout, Rect, Sense, Stroke, Ui, ViewportCommand,
+    pos2, vec2, Align, Color32, CornerRadius, CursorGrab, Key, Layout, Rect, Sense, Stroke, Ui,
+    ViewportCommand,
 };
+use leeconnect::annotation::StrokePath;
 use leeconnect::input::{InputEvent, MouseButton};
+use leeconnect::msg::ControlMsg;
+use super::super::app::SessionCmd;
 use std::sync::atomic::Ordering;
 
 pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
@@ -13,8 +17,37 @@ pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
     let avail = ui.available_size();
 
     let (bg_rect, _) = ui.allocate_exact_size(avail, Sense::hover());
-    // Fill stage with dark live background #0A0A0B
     ui.painter().rect_filled(bg_rect, CornerRadius::ZERO, p.live_bg);
+
+    // Follow-mode automatic resolution sync (debounced)
+    if app.follow_mode && app.last_follow_sent.elapsed().as_millis() >= 450 {
+        let tw = (bg_rect.width().round() as u32).max(640);
+        let th = (bg_rect.height().round() as u32).max(480);
+        if (tw, th) != app.last_follow_size {
+            app.last_follow_size = (tw, th);
+            app.last_follow_sent = std::time::Instant::now();
+            let _ = app.ctrl_tx.send(ControlMsg::SetResolution { width: tw, height: th });
+        }
+    }
+
+    // F8 hotkey toggles relative mouse mode
+    if ui.input(|i| i.key_pressed(Key::F8)) {
+        app.relative_mouse_mode = !app.relative_mouse_mode;
+        let grab = if app.relative_mouse_mode {
+            CursorGrab::Locked
+        } else {
+            CursorGrab::None
+        };
+        ui.ctx().send_viewport_cmd(ViewportCommand::CursorGrab(grab));
+        app.push_toast(
+            "相对鼠标模式",
+            if app.relative_mouse_mode {
+                "已锁定鼠标用于游戏视角控制（按 F8 释放）"
+            } else {
+                "已恢复绝对坐标模式"
+            },
+        );
+    }
 
     let hw = app.hw.load(Ordering::Relaxed) as usize;
     let hh = app.hh.load(Ordering::Relaxed) as usize;
@@ -39,11 +72,11 @@ pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
     // Aspect-fit video rectangle with rotation + zoom (UU: screen_orientation / screen_zoomscale)
     let rot = leeconnect::view::Rotation::from_deg(app.rotation_deg);
     let (rw, rh) = leeconnect::view::rotated_size(hw as f32, hh as f32, rot);
-    let (dw, dh) = leeconnect::view::fit_size(bg_rect.width(), bg_rect.height(), hw as f32, hh as f32, rot, app.zoom);
+    let (dw, dh) =
+        leeconnect::view::fit_size(bg_rect.width(), bg_rect.height(), hw as f32, hh as f32, rot, app.zoom);
     let disp = vec2(dw.max(10.0), dh.max(10.0));
     let screen_rect = Rect::from_center_size(bg_rect.center(), disp);
 
-    // Draw remote desktop image (rotated about its UV center when needed)
     let img = egui::Image::new(tex).max_size(vec2(rw.max(10.0), rh.max(10.0)));
     let img = if rot.deg() == 0 {
         img
@@ -52,21 +85,54 @@ pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
     };
     ui.put(screen_rect, img);
 
+    // Overlay existing & active annotation strokes (UU feature: annotation_v1 / v2)
+    {
+        let painter = ui.painter().with_clip_rect(screen_rect);
+        let draw_stroke = |s: &StrokePath| {
+            if s.points.len() < 2 {
+                return;
+            }
+            let c = Color32::from_rgba_unmultiplied(s.color[0], s.color[1], s.color[2], s.color[3]);
+            let pts: Vec<_> = s
+                .points
+                .iter()
+                .map(|&[nx, ny]| {
+                    pos2(
+                        screen_rect.min.x + nx * screen_rect.width(),
+                        screen_rect.min.y + ny * screen_rect.height(),
+                    )
+                })
+                .collect();
+            for w in pts.windows(2) {
+                painter.line_segment([w[0], w[1]], Stroke::new(s.width_px, c));
+            }
+        };
+        for s in &app.annotations {
+            draw_stroke(s);
+        }
+        if let Some(s) = &app.active_stroke {
+            draw_stroke(s);
+        }
+    }
+
     // Overlay the remote cursor when enabled (UU feature: mouse_cursor)
     if app.show_remote_cursor {
         let cur = app.slot.lock().unwrap().cursor;
         if let Some((cx, cy, visible)) = cur {
             if visible && hw > 0 && hh > 0 {
-                // forward-map source cursor coords through rotation into the drawn rect
                 let (px, py) = leeconnect::view::remote_to_pointer(
-                    cx as f32, cy as f32,
-                    screen_rect.min.x, screen_rect.min.y,
-                    screen_rect.width(), screen_rect.height(),
-                    hw as f32, hh as f32, rot,
+                    cx as f32,
+                    cy as f32,
+                    screen_rect.min.x,
+                    screen_rect.min.y,
+                    screen_rect.width(),
+                    screen_rect.height(),
+                    hw as f32,
+                    hh as f32,
+                    rot,
                 );
                 if Rect::from_min_size(screen_rect.min, disp).contains(pos2(px, py)) {
                     let painter = ui.painter();
-                    // white crosshair with dark halo so it reads on any background
                     let arm = 9.0;
                     let halo = Color32::from_black_alpha(180);
                     let line = Color32::WHITE;
@@ -80,67 +146,115 @@ pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
                             Stroke::new(1.5, halo),
                         );
                     }
-                    painter.line_segment(
-                        [pos2(px - arm, py), pos2(px + arm, py)],
-                        Stroke::new(1.0, line),
-                    );
-                    painter.line_segment(
-                        [pos2(px, py - arm), pos2(px, py + arm)],
-                        Stroke::new(1.0, line),
-                    );
+                    painter.line_segment([pos2(px - arm, py), pos2(px + arm, py)], Stroke::new(1.0, line));
+                    painter.line_segment([pos2(px, py - arm), pos2(px, py + arm)], Stroke::new(1.0, line));
                     painter.circle_filled(pos2(px, py), 1.5, line);
                 }
             }
         }
     }
 
-    // Remote mouse capture on screen_rect
+    // Remote input / annotation capture on screen_rect
     let input_id = ui.scope_id().with("remote-desktop-input");
     let resp = ui.interact(screen_rect, input_id, Sense::click_and_drag());
-    if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
+
+    if app.annotation_mode {
+        if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+            if screen_rect.contains(pos) && screen_rect.width() > 1.0 && screen_rect.height() > 1.0 {
+                let nx = ((pos.x - screen_rect.min.x) / screen_rect.width()).clamp(0.0, 1.0);
+                let ny = ((pos.y - screen_rect.min.y) / screen_rect.height()).clamp(0.0, 1.0);
+                if resp.drag_started() || (ui.input(|i| i.pointer.primary_pressed()) && app.active_stroke.is_none()) {
+                    app.active_stroke = Some(StrokePath {
+                        color: app.annotation_color,
+                        width_px: 3.0,
+                        points: vec![[nx, ny]],
+                    });
+                } else if ui.input(|i| i.pointer.primary_down()) {
+                    if let Some(s) = app.active_stroke.as_mut() {
+                        s.points.push([nx, ny]);
+                    }
+                }
+            }
+        }
+        if resp.drag_stopped() || ui.input(|i| i.pointer.primary_released()) {
+            if let Some(s) = app.active_stroke.take() {
+                if s.points.len() >= 2 {
+                    let _ = app.ctrl_tx.send(ControlMsg::AnnotationStroke {
+                        color: s.color,
+                        width_px: s.width_px as u8,
+                        points: s.to_wire_points(),
+                    });
+                    app.annotations.push(s);
+                }
+            }
+        }
+    } else if app.relative_mouse_mode {
+        // Relative game mouse mode: forward pointer deltas directly
+        let delta = ui.input(|i| i.pointer.delta());
+        if delta.x.abs() > 0.1 || delta.y.abs() > 0.1 {
+            let _ = app.input_tx.send(InputEvent::MoveRel {
+                dx: delta.x.round() as i32,
+                dy: delta.y.round() as i32,
+            });
+        }
+        if resp.clicked() {
+            let _ = app.input_tx.send(InputEvent::Button { button: MouseButton::Left, down: true });
+            let _ = app.input_tx.send(InputEvent::Button { button: MouseButton::Left, down: false });
+        }
+        if resp.secondary_clicked() {
+            let _ = app.input_tx.send(InputEvent::Button { button: MouseButton::Right, down: true });
+            let _ = app.input_tx.send(InputEvent::Button { button: MouseButton::Right, down: false });
+        }
+    } else if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
         if screen_rect.contains(pos) && screen_rect.width() > 1.0 && screen_rect.height() > 1.0 {
-            // inverse-map pointer through rotation+zoom back to remote source coords
             let (rx_f, ry_f) = leeconnect::view::pointer_to_remote(
-                pos.x, pos.y,
-                screen_rect.min.x, screen_rect.min.y,
-                screen_rect.width(), screen_rect.height(),
-                hw as f32, hh as f32, rot,
+                pos.x,
+                pos.y,
+                screen_rect.min.x,
+                screen_rect.min.y,
+                screen_rect.width(),
+                screen_rect.height(),
+                hw as f32,
+                hh as f32,
+                rot,
             );
             let rx = rx_f.clamp(0.0, hw as f32 - 1.0) as u32;
             let ry = ry_f.clamp(0.0, hh as f32 - 1.0) as u32;
             let _ = app.input_tx.send(InputEvent::MoveAbs { x: rx, y: ry });
 
             if resp.clicked() {
-                let _ = app
-                    .input_tx
-                    .send(InputEvent::Button { button: MouseButton::Left, down: true });
-                let _ = app
-                    .input_tx
-                    .send(InputEvent::Button { button: MouseButton::Left, down: false });
+                let _ = app.input_tx.send(InputEvent::Button { button: MouseButton::Left, down: true });
+                let _ = app.input_tx.send(InputEvent::Button { button: MouseButton::Left, down: false });
             }
             if resp.secondary_clicked() {
-                let _ = app
-                    .input_tx
-                    .send(InputEvent::Button { button: MouseButton::Right, down: true });
-                let _ = app
-                    .input_tx
-                    .send(InputEvent::Button { button: MouseButton::Right, down: false });
+                let _ = app.input_tx.send(InputEvent::Button { button: MouseButton::Right, down: true });
+                let _ = app.input_tx.send(InputEvent::Button { button: MouseButton::Right, down: false });
             }
             if resp.drag_started() {
-                let _ = app
-                    .input_tx
-                    .send(InputEvent::Button { button: MouseButton::Left, down: true });
+                let _ = app.input_tx.send(InputEvent::Button { button: MouseButton::Left, down: true });
             }
             if resp.drag_stopped() {
-                let _ = app
-                    .input_tx
-                    .send(InputEvent::Button { button: MouseButton::Left, down: false });
+                let _ = app.input_tx.send(InputEvent::Button { button: MouseButton::Left, down: false });
             }
         }
     }
 
-    // Keyboard capture when remote desktop is hovered/active
-    if resp.hovered() {
+    // Mouse wheel & keyboard capture when remote desktop is hovered/active
+    if resp.hovered() && !app.annotation_mode {
+        let scroll = ui.input(|i| i.smooth_scroll_delta);
+        if scroll.y.abs() > 0.5 {
+            let _ = app.input_tx.send(InputEvent::Wheel {
+                delta: (scroll.y * 3.0).round() as i32,
+                horizontal: false,
+            });
+        }
+        if scroll.x.abs() > 0.5 {
+            let _ = app.input_tx.send(InputEvent::Wheel {
+                delta: (scroll.x * 3.0).round() as i32,
+                horizontal: true,
+            });
+        }
+
         let key_events: Vec<(u16, bool)> = ui.input(|i| {
             let mut out = Vec::new();
             for ev in &i.events {
@@ -157,6 +271,65 @@ pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
         }
     }
 
+    // Subtle status badge when relative mouse or follow mode is active
+    if app.relative_mouse_mode || app.follow_mode {
+        let label = match (app.relative_mouse_mode, app.follow_mode) {
+            (true, true) => "相对鼠标已锁定 (F8 释放) · 跟随分辨率",
+            (true, false) => "相对鼠标已锁定 (按 F8 释放)",
+            (false, true) => "跟随窗口分辨率已开启",
+            _ => "",
+        };
+        let badge_r = Rect::from_min_size(pos2(bg_rect.min.x + 12.0, bg_rect.min.y + 10.0), vec2(236.0, 24.0));
+        ui.painter().rect_filled(badge_r, CornerRadius::same(7), Color32::from_black_alpha(150));
+        let g = ui.painter().layout_no_wrap(label.to_owned(), theme::text_font(11.5), Color32::WHITE);
+        ui.painter().galley(pos2(badge_r.min.x + 10.0, badge_r.center().y - g.size().y * 0.5), g, Color32::WHITE);
+    }
+
+    // ------------------------------------------------------------------------
+    // Floating Annotation Mini Toolbar (when annotation_mode is active)
+    // ------------------------------------------------------------------------
+    if app.annotation_mode {
+        let bar_w = 276.0;
+        let bar_h = 36.0;
+        let bar_rect = Rect::from_center_size(pos2(bg_rect.center().x, bg_rect.min.y + 28.0), vec2(bar_w, bar_h));
+        ui.painter().rect(
+            bar_rect,
+            CornerRadius::same(10),
+            p.hud,
+            Stroke::new(1.0, Color32::from_white_alpha(30)),
+            egui::StrokeKind::Inside,
+        );
+        let mut bar_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(bar_rect.shrink(6.0))
+                .layout(Layout::left_to_right(Align::Center)),
+        );
+        bar_ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
+        for rgba in [
+            [255u8, 59, 48, 255],
+            [10, 132, 255, 255],
+            [52, 199, 89, 255],
+            [255, 214, 10, 255],
+        ] {
+            let (cr, cresp) = bar_ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+            let c = Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3]);
+            bar_ui.painter().circle_filled(cr.center(), 7.0, c);
+            if app.annotation_color == rgba {
+                bar_ui.painter().circle_stroke(cr.center(), 9.0, Stroke::new(1.5, Color32::WHITE));
+            }
+            if cresp.clicked() {
+                app.annotation_color = rgba;
+            }
+        }
+        if push_button(&mut bar_ui, &p, "清空", ButtonKind::Secondary, false, None).clicked() {
+            app.annotations.clear();
+            let _ = app.ctrl_tx.send(ControlMsg::AnnotationClear);
+        }
+        if push_button(&mut bar_ui, &p, "完成", ButtonKind::Primary, false, None).clicked() {
+            app.annotation_mode = false;
+        }
+    }
+
     // ------------------------------------------------------------------------
     // Floating HUD Toolbar (Bottom Center, 18px from bottom)
     // ------------------------------------------------------------------------
@@ -165,7 +338,6 @@ pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
     let hud_bottom = bg_rect.max.y - 18.0;
     let hud_rect = Rect::from_center_size(pos2(bg_rect.center().x, hud_bottom - hud_h * 0.5), vec2(hud_w, hud_h));
 
-    // Mouse idle fade-out check
     let pointer_near_bottom = ui.input(|i| {
         i.pointer.hover_pos().map_or(false, |p| p.y >= bg_rect.max.y - 120.0)
     });
@@ -179,7 +351,6 @@ pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
     let is_hud_visible = app.last_mouse_activity.elapsed().as_secs_f32() < 3.0;
 
     if is_hud_visible {
-        // Draw HUD glass background
         let painter = ui.painter();
         painter.rect(
             hud_rect,
@@ -203,47 +374,51 @@ pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
             ui.ctx().send_viewport_cmd(ViewportCommand::Fullscreen(app.is_fullscreen));
         }
 
-        // 2. Clipboard
+        // 2. Clipboard (real QUIC FrameType::Clipboard push)
         if hud_button(&mut hud_ui, &p, icons::CLIPBOARD, false, false, "剪贴板同步").clicked() {
             if let Ok(Some(text)) = leeconnect::clipboard::read_clipboard_text() {
+                let _ = app.cmd_tx.send(SessionCmd::SendClipboard(text.clone()));
                 let preview = if text.chars().count() > 18 {
                     format!("{}…", text.chars().take(18).collect::<String>())
                 } else {
                     text
                 };
-                let msg = format!("已将本地剪贴板发送至远端: \"{preview}\"");
+                let msg = format!("已发送本地剪贴板至远端: \"{preview}\"");
                 app.push_toast("剪贴板已同步", &msg);
             } else {
-                app.push_toast("剪贴板就绪", "双向剪贴板同步监听活跃中");
+                app.push_toast("剪贴板就绪", "当前本地剪贴板为空或非文本");
             }
         }
 
-        // 3. File Transfer
-        if hud_button(&mut hud_ui, &p, icons::FOLDER_UP, false, false, "发送文件…").clicked() {
-            std::thread::spawn(|| {
-                let _ = std::process::Command::new("explorer.exe")
-                    .arg("/select,C:\\")
-                    .spawn();
-            });
-            app.push_toast("文件传输", "已开启文件选择器，选定文件将流式传输至远端");
+        // 3. File Transfer panel
+        if hud_button(&mut hud_ui, &p, icons::FOLDER_UP, app.show_file_panel, false, "文件传输…").clicked() {
+            app.show_file_panel = !app.show_file_panel;
+            app.show_monitor_popover = false;
+            app.show_more_menu = false;
         }
 
-        // 4. Switch Screen
-        let screen_btn = hud_button(&mut hud_ui, &p, icons::SCREEN_SHARE, false, false, "切换显示器");
+        // 4. Switch Screen (visual monitor picker)
+        let screen_btn = hud_button(&mut hud_ui, &p, icons::SCREEN_SHARE, app.show_monitor_popover, false, "切换显示器");
         if screen_btn.clicked() {
-            let hw = app.hw.load(Ordering::Relaxed);
-            let hh = app.hh.load(Ordering::Relaxed);
-            let msg = format!("远端当前主显示器: {hw}×{hh} (60Hz)");
-            app.push_toast("显示器信息", &msg);
+            app.show_monitor_popover = !app.show_monitor_popover;
+            app.show_file_panel = false;
+            app.show_more_menu = false;
         }
 
-        // 5. Privacy Screen — real RPC to host (engines black cover + physical-input hooks there)
+        // 5. Privacy Screen — real RPC to host
         let privacy_active = app.privacy_screen_active;
         if hud_button(&mut hud_ui, &p, icons::EYE_OFF, privacy_active, false, "隐私屏").clicked() {
             let verb = if privacy_active { "privacy_off" } else { "privacy_on" };
             app.send_system_action(verb);
             app.privacy_screen_active = !privacy_active;
-            app.push_toast("隐私屏", if app.privacy_screen_active { "已发送开启指令，远端物理屏将黑屏屏蔽（连按3次Esc本地解除）" } else { "已发送关闭指令" });
+            app.push_toast(
+                "隐私屏",
+                if app.privacy_screen_active {
+                    "已发送开启指令，远端物理屏将黑屏屏蔽（连按3次Esc本地解除）"
+                } else {
+                    "已发送关闭指令"
+                },
+            );
         }
 
         // 6. More Menu (…)

@@ -37,6 +37,8 @@ bitflags! {
         const PRIVACY_SCREEN   = 1 << 21;
         const SYSTEM_ACTIONS   = 1 << 22; // reboot/shutdown/lock/taskmgr
         const WAKE_ON_LAN      = 1 << 23;
+        const FOLLOW_MODE      = 1 << 24; // match remote display res to controller
+        const ANNOTATION       = 1 << 25; // screen drawing overlay
     }
 }
 

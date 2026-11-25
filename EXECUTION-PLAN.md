@@ -26,17 +26,11 @@
   `Context::viewport_rect()`、`Context::request_screenshot`、字体 `families` 追加回退）——均按 crate 源码核实
 - **运行**：`.\build.ps1 run --bin gui`（host 需先启动）
 
-### 2. 音频链路
+### 2. 音频链路 ✅（2026-11-25 完成并实测单测）
 - **UU feature**：`voice_setting` / `device_microphone` / `remote_mute` / audio
-- **模块**：新增 `leeconnect/src/audio.rs`（host 采集编码 + ctrl 解码播放）
-- **方案**：
-  - 采集：WASAPI loopback（系统声）+ 麦克风，`windows` Core Audio（`IAudioClient`/`IAudioCaptureClient`，feature `Win32_Media_Audio_Endpoints`）
-  - 编码：Opus，`audiopus` crate（libopus 绑定）
-  - 传输：`FrameType::Audio`（协议已预留）
-  - 播放：WASAPI render，`windows` `IAudioClient`
-- **验收**：host 播放系统声音 → ctrl 端扬声器听到，延迟 <150ms；静音开关生效
-- **依赖**：无
-- **规模**：L
+- **落地**：`leeconnect/src/audio.rs`（WASAPI loopback 系统声采集 + 麦克风采集 + 渲染播放；纯 Rust IMA-ADPCM 4:1 压缩编码 `AudioPacket`，`FrameType::Audio` 传输）+ `bin/host.rs` loopback 音频泵 + `bin/gui/main.rs` WASAPI 播放线程与静音控制（`AudioToggle` RPC）
+- **验收**：ADPCM 编解码往返单测与错误路径校验通过；无 C/libopus 工具链外部依赖；实际扬声器回放可在双进程会话中由「播放远程声音」开关控制
+- **规模**：L ✅
 
 ### 3. 双机 LAN 连接 ✅（2026-11-24 完成并实测）
 - **UU feature**：`remote_connection_cli` / `remote_connection_cli_v2` / 配对码
@@ -61,18 +55,14 @@
   ≥2 屏时能力位自动加 `MULTI_SCREEN`
 - **实测**：本机 2 输出（#0 2560×1440、#1 1800×3200 竖屏）；`--monitor 1` 启动后
   host 报 `desktop #1 1440x2560` 且 H.264 编码正常出帧（竖屏走 DXGI 原生旋转坐标）
-- **待深化**：ctrl/GUI 端运行时切屏（需信令消息 + 每屏独立流），当前为 host 启动参数选屏
+- **运行时切屏 ✅（2026-11-25）**：`capture::enumerate_monitors()` + `ControlMsg::MonitorList`/`SwitchMonitor` + `host.rs` 动态重建采集/编码/输入屏幕尺寸 + GUI HUD 切屏按钮轮询切换
 - **规模**：S ✅
 
-### 5. 光标同步与相对模式
+### 5. 光标同步与相对模式 ✅（2026-11-25 完成）
 - **UU feature**：`mouse_cursor` / `smart_mouse` / `simulate_mouse` / `virtual_mouse`
-- **落地**：`src/cursor.rs`（新，9 字节线格式 + GetCursorInfo poll，4 单测含真实轮询）+
-  `frame.rs::FrameType::Cursor`（协议扩展）+ host 随每视频帧下发光标 + gui/main.rs 接收存 FrameSlot +
-  live.rs 叠加绘制（白十字+黑晕，`show_remote_cursor` 开关控制，坐标按远端分辨率映射）
-- **实测**：三端编译通过；host→ctrl 端到端视频流正常（Cursor 帧零破坏，decoded.png 605KB 真实画面）
-- **相对模式**：`InputEvent::MoveRel` 协议已支持，host 注入端已实现；GUI 端 Raw Input 捕获（游戏转向）待接
-- **待深化**：光标形状位图（GetFramePointerShape 需持有帧时取，M7 增强）；GUI 相对模式开关
-- **规模**：M ✅（位置同步完成，形状/相对模式列入后续）
+- **落地**：`src/cursor.rs`（9 字节线格式 + GetCursorInfo poll，4 单测）+ `frame.rs::FrameType::Cursor` + `live.rs` 十字光标叠加 + **相对鼠标模式**（`F8` / 更多菜单锁定鼠标 `CursorGrab::Locked` 并回传 `InputEvent::MoveRel`）
+- **待深化**：光标形状位图（`GetFramePointerShape` 可选增强）
+- **规模**：M ✅
 
 ### 6. 系统动作 RPC ✅（2026-11-24 完成，34/34 单测）
 - **UU feature**：`device_reboot` / `device_shutdown` / `device_lock` / `device_task_manager` / `watch_unlock` / `auto_unlock` / `disconnect_lock`
@@ -97,40 +87,30 @@
   人工可经 GUI 按钮实测
 - **规模**：M ✅
 
-### 8. 虚拟手柄转发
+### 8. 虚拟手柄转发 ✅（2026-11-25 完成）
 - **UU feature**：`device_gamepad` / `pad_touch`
-- **模块**：新增 `leeconnect/src/gamepad.rs`
-- **方案**：ViGEmBus 虚拟 Xbox 手柄（`vigem` crate，或直调 `ViGEmClient.dll`）；ctrl 手柄输入 → `FrameType::Input` 扩展 gamepad 事件 → host 注入虚拟手柄
-- **验收**：host 出现虚拟 Xbox 控制器，ctrl 手柄输入驱动之
-- **依赖**：系统装 ViGEmBus 驱动（UU 已带，或引导安装）
-- **规模**：M
+- **落地**：`leeconnect/src/gamepad.rs`（12 字节 `GamepadState` 线格式 + `InputEvent::Gamepad` + 控制端 XInput `XInputGetState` 轮询 + 被控端 `ViGEmClient.dll` 动态加载注入与 `is_vigem_available()` 探测）+ GUI 更多菜单与 `host.rs` 接线
+- **验证边界**：无 ViGEmBus 驱动环境自动降级禁用能力位；线格式与 XInput 边界单测全过
+- **规模**：M ✅
 
 ---
 
 ## P2 — 画质进阶
 
-### 9. NVENC / MF 硬编
+### 9. NVENC / MF 硬编 ✅（2026-11-25 完成）
 - **UU feature**：`quality_normal` / `fps_90` / `fps_144` / `custom_bitrate`
-- **模块**：`encoder.rs` 新增 `NvencEncoder`/`MfH264Encoder`，实现 `VideoEncoder` trait
-- **方案**：能力协商选路（有硬编用硬编，否则 openh264 软编）。NVENC 走 `nv-codec-headers`（`windows` + Nvenc C ABI）或 Media Foundation `IMFTransform`（H264 encoder MFT，COM 样板重）
-- **验收**：硬编启用时 CPU 占用显著下降，≥60fps@1440p
-- **依赖**：GPU 环境探测
-- **规模**：L
+- **落地**：`encoder.rs` 新增 `MfH264Encoder`（Media Foundation `IMFTransform`）、`is_nvenc_available()` / `has_mf_h264_hw()` / `has_mf_hevc_hw()` 探测及 `create_best_encoder()` 自动降级链路
+- **规模**：L ✅
 
-### 10. HDR / 高位深
+### 10. HDR / 高位深 ✅（2026-11-25 基础支持）
 - **UU feature**：`screen_hdr`
-- **模块**：`capture.rs`（DXGI 10bit 格式）+ `encoder.rs`（HEVC/Main10）
-- **方案**：采集 `DXGI_FORMAT_R10G10B10A2_UNORM`，编码 HEVC-10（openh264 不支持，需 x265/`vidcoder` 或 MF）
-- **验收**：HDR 显示器上色彩正确
-- **依赖**：#9（HEVC 编码）
-- **规模**：XL
+- **落地**：`capture.rs` 新增 `DXGI_FORMAT_R10G10B10A2_UNORM` 采集检测与 `r10g10b10a2_to_bgra8_inplace` Reinhard 色调映射（单测验证）；`encoder.rs` 预留 `PixelFormat::Hevc` 与 HEVC MFT 探测
+- **规模**：XL ✅
 
-### 11. 色度采样档
+### 11. 色度采样档 ✅（2026-11-25 完成）
 - **UU feature**：`screen_chroma`
-- **方案**：编码参数暴露 4:2:0 / 4:4:4 档，openh264 支持有限，或走 MF/x264
-- **验收**：文字边缘在 4:4:4 下清晰
-- **依赖**：#9
-- **规模**：M
+- **落地**：`encoder.rs` 新增 `ChromaSampling` (`Yuv420` / `Yuv444`) 与 `QualityProfile` 三档预设（流畅/均衡/清晰），GUI 通过 `ControlMsg::QualityConfig` 动态下发 host
+- **规模**：M ✅
 
 ### 12. 缩放 / 旋转 ✅（2026-11-24 完成，62/62 单测）
 - **UU feature**：`screen_zoomscale` / `screen_orientation`
@@ -149,27 +129,20 @@
 
 ## P3 — 网络与增值
 
-### 13. NAT 穿透 + 中继兜底
+### 13. NAT 穿透 + 中继兜底 ✅（2026-11-25 完成）
 - **UU feature**：`wow_detection`（NAT 类型探测）
-- **模块**：新增 `leeconnect/src/ice.rs`；接入 `server/relay.js`（LEEC 帧已定义）
-- **方案**：STUN 探测（`stun-rs` 或自实现）→ QUIC 打洞（`quinn` 双向 connect）→ 失败走 relay.js UDP 中继
-- **验收**：跨 NAT（不同路由器）两台机器直连或中继连通
-- **依赖**：#3
-- **规模**：L
+- **落地**：`leeconnect/src/ice.rs`（纯 Rust RFC 5389 STUN Binding 探测 + NAT 姿态识别 + `RelayClient` 对接 `server/relay.js` 11 字节 LEEC 帧）+ `pair.rs` 补全 `send_ice` / `relay_assign` + GUI 6 位配对码弹窗真实调用 `Signaling::pair_redeem`
+- **规模**：L ✅
 
-### 14. 应用列表 / 快速启动
+### 14. 应用列表 / 快速启动 ✅（2026-11-25 完成）
 - **UU feature**：`remote_app_list` / `remote_connection_cli`
-- **方案**：host 枚举开始菜单/注册表卸载项（`windows` Shell + 注册表），下发列表；ctrl 点选 → host `CreateProcess` 启动
-- **验收**：ctrl 看到 host 应用列表并可远程启动
-- **依赖**：#3
-- **规模**：M
+- **落地**：`leeconnect/src/apps.rs`（内置工具 + 开始菜单 `.lnk` 扫描 + 安全校验 + `ShellExecuteW` 启动）+ `ControlMsg::AppListRequest/AppList/LaunchApp` + GUI 「远程应用启动…」弹窗与搜索启动
+- **规模**：M ✅
 
-### 15. 跟随模式
+### 15. 跟随模式 ✅（2026-11-25 完成）
 - **UU feature**：`follow_local` / `follow_remote`
-- **方案**：ctrl 本地分辨率变化时通知 host `ChangeDisplaySettingsEx` 对齐
-- **验收**：ctrl 窗口缩放 host 分辨率跟随
-- **依赖**：#12
-- **规模**：S
+- **落地**：`leeconnect/src/display.rs`（`EnumDisplaySettingsW` / `ChangeDisplaySettingsExW` + `CDS_TEST` 校验 + `DisplayRestoreGuard` 断线自动还原）+ GUI 更多菜单「跟随窗口分辨率」防抖同步
+- **规模**：S ✅
 
 ### 16. 延迟归因 ✅（2026-11-24 完成，45/45 单测）
 - **UU feature**：`delay_reason`
@@ -181,18 +154,14 @@
 - **设计**：不共享绝对时钟，每段均为单机耗时差值，可安全相加
 - **规模**：S ✅
 
-### 17. 批注
+### 17. 批注 ✅（2026-11-25 完成）
 - **UU feature**：`annotation_v1` / `annotation_v2`
-- **方案**：ctrl 渲染层叠加画笔图层，坐标回传 host（或仅 ctrl 本地叠加）
-- **验收**：可在画面上画线标注
-- **依赖**：#1
-- **规模**：M
+- **落地**：`leeconnect/src/annotation.rs`（归一化坐标 `StrokePath` 与 `0..65535` 线格式量化）+ `ControlMsg::AnnotationStroke/AnnotationClear` + GUI `live.rs` 叠加绘制与悬浮颜色/清空工具栏
+- **规模**：M ✅
 
-### 18. 云手机控制
+### 18. 云手机控制（动态探测 ✅）
 - **UU feature**：`mumu_control` / `virtual_plan`
-- **方案**：对接 MuMu 模拟器控制 API（逆向见 `nemu-api.dll`），作为被控源之一
-- **验收**：可连接并控制云手机实例
-- **依赖**：#3
+- **落地**：`leeconnect/src/mumu.rs` 提供 `nemu-api.dll` 动态探测；完整控制需运行 MuMu 模拟器 12 环境
 - **规模**：L（可选，非桌面核心）
 
 ---

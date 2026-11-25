@@ -13,6 +13,34 @@ pub enum PixelFormat {
     Nv12 = 1,
     /// Encoded H.264 Annex-B bitstream (not raw pixels).
     H264 = 2,
+    /// Encoded HEVC / 10-bit Annex-B bitstream.
+    Hevc = 3,
+    /// Encoded H.264 4:4:4 chroma bitstream.
+    H264_444 = 4,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChromaSampling {
+    Yuv420,
+    Yuv444,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QualityProfile {
+    pub bitrate_bps: u32,
+    pub fps: u8,
+    pub chroma: ChromaSampling,
+    pub hdr: bool,
+}
+
+impl QualityProfile {
+    pub fn from_preset(preset: usize) -> Self {
+        match preset {
+            0 => Self { bitrate_bps: 2_500_000, fps: 30, chroma: ChromaSampling::Yuv420, hdr: false },
+            1 => Self { bitrate_bps: 8_000_000, fps: 60, chroma: ChromaSampling::Yuv420, hdr: false },
+            _ => Self { bitrate_bps: 18_000_000, fps: 90, chroma: ChromaSampling::Yuv444, hdr: false },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,9 +53,10 @@ pub struct EncodedFrame {
     pub data: Vec<u8>,
 }
 
-pub trait VideoEncoder {
+pub trait VideoEncoder: Send {
     fn encode(&mut self, frame: &CapturedFrame, pts: u64) -> Result<EncodedFrame>;
     fn name(&self) -> &'static str;
+    fn request_keyframe(&mut self) {}
 }
 
 impl EncodedFrame {
@@ -66,6 +95,8 @@ impl EncodedFrame {
             0 => PixelFormat::Bgra8,
             1 => PixelFormat::Nv12,
             2 => PixelFormat::H264,
+            3 => PixelFormat::Hevc,
+            4 => PixelFormat::H264_444,
             v => anyhow::bail!("unknown pixfmt {v}"),
         };
         let keyframe = b[9] != 0;
@@ -196,6 +227,10 @@ impl VideoEncoder for H264Encoder {
         "openh264-h264"
     }
 
+    fn request_keyframe(&mut self) {
+        self.enc.force_intra_frame();
+    }
+
     fn encode(&mut self, frame: &CapturedFrame, pts: u64) -> Result<EncodedFrame> {
         use openh264::encoder::FrameType;
         use openh264::formats::{BgraSliceU8, YUVSource};
@@ -240,6 +275,287 @@ impl VideoEncoder for H264Encoder {
             data,
         })
     }
+}
+
+// ---------------------------------------------------------------------------
+// Hardware encoder probing (NVENC + Media Foundation H.264 / HEVC MFTs)
+// ---------------------------------------------------------------------------
+
+/// Probe whether NVIDIA NVENC runtime library (`nvEncodeAPI64.dll`) is installed.
+pub fn is_nvenc_available() -> bool {
+    unsafe {
+        use windows::core::w;
+        use windows::Win32::System::LibraryLoader::LoadLibraryW;
+        LoadLibraryW(w!("nvEncodeAPI64.dll")).is_ok()
+    }
+}
+
+/// Probe whether Media Foundation exposes an encoder MFT for `subtype`
+/// (`MFVideoFormat_H264` or `MFVideoFormat_HEVC`).
+pub fn has_mf_encoder(subtype: windows::core::GUID, hardware_only: bool) -> bool {
+    use windows::Win32::Media::MediaFoundation::{
+        MFMediaType_Video, MFStartup, MFTEnumEx, MFT_CATEGORY_VIDEO_ENCODER,
+        MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SYNCMFT, MFT_REGISTER_TYPE_INFO, MF_VERSION,
+    };
+    use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_MULTITHREADED};
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        if MFStartup(MF_VERSION, 0).is_err() {
+            return false;
+        }
+        let out_info = MFT_REGISTER_TYPE_INFO {
+            guidMajorType: MFMediaType_Video,
+            guidSubtype: subtype,
+        };
+        let flags = if hardware_only {
+            MFT_ENUM_FLAG_HARDWARE
+        } else {
+            MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_HARDWARE
+        };
+        let mut activates: *mut Option<windows::Win32::Media::MediaFoundation::IMFActivate> =
+            std::ptr::null_mut();
+        let mut count = 0u32;
+        let ok = MFTEnumEx(
+            MFT_CATEGORY_VIDEO_ENCODER,
+            flags,
+            None,
+            Some(&out_info),
+            &mut activates,
+            &mut count,
+        )
+        .is_ok()
+            && count > 0;
+        if !activates.is_null() {
+            for i in 0..count as usize {
+                std::ptr::drop_in_place(activates.add(i));
+            }
+            CoTaskMemFree(Some(activates as *const _));
+        }
+        ok
+    }
+}
+
+pub fn has_mf_h264_hw() -> bool {
+    has_mf_encoder(windows::Win32::Media::MediaFoundation::MFVideoFormat_H264, true)
+}
+
+pub fn has_mf_hevc_hw() -> bool {
+    has_mf_encoder(windows::Win32::Media::MediaFoundation::MFVideoFormat_HEVC, true)
+}
+
+/// Windows Media Foundation H.264 encoder (`IMFTransform`). Uses synchronous
+/// software/hardware MFTs with NV12 input and emits Annex-B H.264 NAL units.
+pub struct MfH264Encoder {
+    mft: windows::Win32::Media::MediaFoundation::IMFTransform,
+    width: u32,
+    height: u32,
+    frame_duration_100ns: i64,
+    chroma: ChromaSampling,
+    counter: u64,
+}
+
+unsafe impl Send for MfH264Encoder {}
+
+impl MfH264Encoder {
+    pub fn new(
+        width: u32,
+        height: u32,
+        bitrate_bps: u32,
+        fps: u32,
+        chroma: ChromaSampling,
+        prefer_hardware: bool,
+    ) -> Result<Self> {
+        use anyhow::Context;
+        use windows::Win32::Media::MediaFoundation::{
+            IMFTransform, MFCreateMediaType, MFMediaType_Video, MFStartup, MFTEnumEx,
+            MFVideoFormat_H264, MFVideoFormat_NV12, MFT_CATEGORY_VIDEO_ENCODER,
+            MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SYNCMFT, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
+            MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_REGISTER_TYPE_INFO, MF_MT_AVG_BITRATE,
+            MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
+            MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_VERSION, eAVEncH264VProfile_444,
+            eAVEncH264VProfile_High,
+        };
+        use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_MULTITHREADED};
+
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            MFStartup(MF_VERSION, 0).context("MFStartup")?;
+            let out_info = MFT_REGISTER_TYPE_INFO {
+                guidMajorType: MFMediaType_Video,
+                guidSubtype: MFVideoFormat_H264,
+            };
+            let flags = if prefer_hardware {
+                MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SYNCMFT
+            } else {
+                MFT_ENUM_FLAG_SYNCMFT
+            };
+            let mut activates: *mut Option<windows::Win32::Media::MediaFoundation::IMFActivate> =
+                std::ptr::null_mut();
+            let mut count = 0u32;
+            MFTEnumEx(
+                MFT_CATEGORY_VIDEO_ENCODER,
+                flags,
+                None,
+                Some(&out_info),
+                &mut activates,
+                &mut count,
+            )
+            .context("MFTEnumEx(H264)")?;
+            ensure!(count > 0 && !activates.is_null(), "no H.264 MFT available");
+            let act = (*activates).take().context("null MFT activate")?;
+            for i in 0..count as usize {
+                std::ptr::drop_in_place(activates.add(i));
+            }
+            CoTaskMemFree(Some(activates as *const _));
+
+            let mft: IMFTransform = act.ActivateObject().context("MFT ActivateObject")?;
+            let pack_u64 = |hi: u32, lo: u32| -> u64 { ((hi as u64) << 32) | (lo as u64) };
+
+            let out_mt = MFCreateMediaType().context("MFCreateMediaType out")?;
+            out_mt.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+            out_mt.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
+            out_mt.SetUINT32(&MF_MT_AVG_BITRATE, bitrate_bps)?;
+            out_mt.SetUINT64(&MF_MT_FRAME_SIZE, pack_u64(width, height))?;
+            out_mt.SetUINT64(&MF_MT_FRAME_RATE, pack_u64(fps.max(1), 1))?;
+            out_mt.SetUINT32(&MF_MT_INTERLACE_MODE, 2)?; // MFVideoInterlace_Progressive
+            out_mt.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pack_u64(1, 1))?;
+            let profile = match chroma {
+                ChromaSampling::Yuv444 => eAVEncH264VProfile_444.0 as u32,
+                ChromaSampling::Yuv420 => eAVEncH264VProfile_High.0 as u32,
+            };
+            let _ = out_mt.SetUINT32(
+                &windows::Win32::Media::MediaFoundation::MF_MT_MPEG2_PROFILE,
+                profile,
+            );
+            mft.SetOutputType(0, &out_mt, 0).context("MFT SetOutputType")?;
+
+            let in_mt = MFCreateMediaType().context("MFCreateMediaType in")?;
+            in_mt.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+            in_mt.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
+            in_mt.SetUINT64(&MF_MT_FRAME_SIZE, pack_u64(width, height))?;
+            in_mt.SetUINT64(&MF_MT_FRAME_RATE, pack_u64(fps.max(1), 1))?;
+            in_mt.SetUINT32(&MF_MT_INTERLACE_MODE, 2)?;
+            in_mt.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pack_u64(1, 1))?;
+            mft.SetInputType(0, &in_mt, 0).context("MFT SetInputType(NV12)")?;
+
+            mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
+            mft.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
+
+            let frame_duration_100ns = 10_000_000i64 / (fps.max(1) as i64);
+            Ok(Self {
+                mft,
+                width,
+                height,
+                frame_duration_100ns,
+                chroma,
+                counter: 0,
+            })
+        }
+    }
+}
+
+impl VideoEncoder for MfH264Encoder {
+    fn name(&self) -> &'static str {
+        "mf-h264"
+    }
+
+    fn encode(&mut self, frame: &CapturedFrame, pts: u64) -> Result<EncodedFrame> {
+        use anyhow::Context;
+        use windows::Win32::Media::MediaFoundation::{
+            MFCreateMemoryBuffer, MFCreateSample, MFT_OUTPUT_DATA_BUFFER,
+        };
+        ensure!(
+            frame.width == self.width && frame.height == self.height,
+            "MfH264Encoder: frame {}x{} != {}x{}",
+            frame.width, frame.height, self.width, self.height
+        );
+
+        let nv12 = bgra_to_nv12(&frame.pixels, frame.stride as usize, self.width, self.height);
+        unsafe {
+            let buf = MFCreateMemoryBuffer(nv12.len() as u32).context("MFCreateMemoryBuffer")?;
+            let mut ptr = std::ptr::null_mut();
+            buf.Lock(&mut ptr, None, None).context("MF buffer Lock")?;
+            std::ptr::copy_nonoverlapping(nv12.as_ptr(), ptr, nv12.len());
+            buf.Unlock()?;
+            buf.SetCurrentLength(nv12.len() as u32)?;
+
+            let sample = MFCreateSample().context("MFCreateSample")?;
+            sample.AddBuffer(&buf)?;
+            sample.SetSampleTime(pts as i64 * self.frame_duration_100ns)?;
+            sample.SetSampleDuration(self.frame_duration_100ns)?;
+
+            self.mft.ProcessInput(0, &sample, 0).context("MFT ProcessInput")?;
+
+            let out_info = self.mft.GetOutputStreamInfo(0)?;
+            let out_buf = MFCreateMemoryBuffer(out_info.cbSize.max(512 * 1024))?;
+            let out_sample = MFCreateSample()?;
+            out_sample.AddBuffer(&out_buf)?;
+            let mut out_data = [MFT_OUTPUT_DATA_BUFFER {
+                dwStreamID: 0,
+                pSample: std::mem::ManuallyDrop::new(Some(out_sample)),
+                dwStatus: 0,
+                pEvents: std::mem::ManuallyDrop::new(None),
+            }];
+            let mut status = 0u32;
+            let mut data = Vec::new();
+            if self.mft.ProcessOutput(0, &mut out_data, &mut status).is_ok() {
+                if let Some(s) = std::mem::ManuallyDrop::take(&mut out_data[0].pSample) {
+                    if let Ok(b) = s.ConvertToContiguousBuffer() {
+                        let mut optr = std::ptr::null_mut();
+                        let mut len = 0u32;
+                        if b.Lock(&mut optr, None, Some(&mut len)).is_ok() {
+                            data.extend_from_slice(std::slice::from_raw_parts(optr, len as usize));
+                            let _ = b.Unlock();
+                        }
+                    }
+                }
+            } else {
+                let _ = std::mem::ManuallyDrop::take(&mut out_data[0].pSample);
+            }
+            let _ = std::mem::ManuallyDrop::take(&mut out_data[0].pEvents);
+            let is_key = self.counter == 0 || contains_idr_nal(&data);
+            self.counter += 1;
+            Ok(EncodedFrame {
+                width: self.width,
+                height: self.height,
+                format: if self.chroma == ChromaSampling::Yuv444 {
+                    PixelFormat::H264_444
+                } else {
+                    PixelFormat::H264
+                },
+                keyframe: is_key,
+                pts,
+                data,
+            })
+        }
+    }
+}
+
+fn contains_idr_nal(annex_b: &[u8]) -> bool {
+    for w in annex_b.windows(5) {
+        if w[0] == 0 && w[1] == 0 && w[2] == 0 && w[3] == 1 && (w[4] & 0x1F) == 5 {
+            return true;
+        }
+    }
+    false
+}
+
+/// Pick the best available encoder (MF Hardware if requested & available, else openh264, else raw).
+pub fn create_best_encoder(
+    w: u32,
+    h: u32,
+    profile: QualityProfile,
+    prefer_hardware: bool,
+) -> Result<Box<dyn VideoEncoder>> {
+    if w % 8 != 0 || h % 8 != 0 {
+        return Ok(Box::new(RawEncoder::new()));
+    }
+    if prefer_hardware && has_mf_h264_hw() {
+        if let Ok(mf) = MfH264Encoder::new(w, h, profile.bitrate_bps, profile.fps as u32, profile.chroma, true) {
+            return Ok(Box::new(mf));
+        }
+    }
+    Ok(Box::new(H264Encoder::new(w, h, profile.bitrate_bps, profile.fps as f32)?))
 }
 
 #[cfg(test)]

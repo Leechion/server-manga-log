@@ -4,6 +4,22 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MonitorDesc {
+    pub index: usize,
+    pub width: u32,
+    pub height: u32,
+    pub is_primary: bool,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppEntry {
+    pub name: String,
+    pub path: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ControlMsg {
     /// device comes online and advertises its capability set
@@ -25,6 +41,24 @@ pub enum ControlMsg {
     SystemAction { action: String },
     /// host's result of a system action, echoed back to the controller
     SystemActionResult { action: String, ok: bool, detail: String },
+    /// multi-monitor list & runtime switching
+    MonitorList { monitors: Vec<MonitorDesc>, active: usize },
+    SwitchMonitor { index: usize },
+    /// dynamic encoder quality/chroma/HDR tier
+    QualityConfig { bitrate_bps: u32, fps: u8, chroma_444: bool, hdr: bool },
+    /// follow-mode resolution sync
+    SetResolution { width: u32, height: u32 },
+    RestoreResolution,
+    /// remote application list & quick launch
+    AppListRequest,
+    AppList { apps: Vec<AppEntry> },
+    LaunchApp { path: String },
+    LaunchAppResult { name: String, ok: bool, detail: String },
+    /// screen annotation strokes (normalized 0..65535 coords)
+    AnnotationStroke { color: [u8; 4], width_px: u8, points: Vec<[u16; 2]> },
+    AnnotationClear,
+    /// enable/disable host audio streaming
+    AudioToggle { enabled: bool },
 }
 
 pub fn encode(m: &ControlMsg) -> String {

@@ -138,13 +138,28 @@ pub async fn send_file(path: &Path, send: &mut SendStream) -> Result<u64> {
 
 /// Receives a file transfer, writing to `out_dir/<name>`; returns the path.
 pub async fn recv_file(recv: &mut RecvStream, out_dir: &Path) -> Result<PathBuf> {
+    let first = transport::read_frame(recv).await.context("file frame")?;
+    recv_file_with_first(first, recv, out_dir).await
+}
+
+/// Receives a file transfer given an already-read initial frame (used when a
+/// stream dispatcher peeks the first frame to route File vs Portmap).
+pub async fn recv_file_with_first(
+    first: Frame,
+    recv: &mut RecvStream,
+    out_dir: &Path,
+) -> Result<PathBuf> {
     use tokio::io::{AsyncWriteExt, BufWriter};
     let mut name: Option<String> = None;
     let mut expect_size = 0u64;
     let mut written = 0u64;
     let mut file: Option<BufWriter<tokio::fs::File>> = None;
+    let mut next_frame = Some(first);
     loop {
-        let f = transport::read_frame(recv).await.context("file frame")?;
+        let f = match next_frame.take() {
+            Some(fr) => fr,
+            None => transport::read_frame(recv).await.context("file frame")?,
+        };
         if f.ftype != FrameType::File {
             bail!("non-file frame in file stream");
         }

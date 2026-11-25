@@ -171,6 +171,32 @@ impl Signaling {
     pub fn heartbeat(&mut self) -> Result<()> {
         self.send_json(&serde_json::json!({ "type": "heartbeat" }))
     }
+
+    /// Forward an ICE candidate blob to the paired peer via signaling.
+    pub fn send_ice(&mut self, candidate: &str) -> Result<()> {
+        self.send_json(&serde_json::json!({ "type": "ice", "candidate": candidate }))
+    }
+
+    /// Request a UDP relay assignment from signaling.js when direct NAT traversal fails.
+    pub fn relay_assign(&mut self) -> Result<(SocketAddr, String)> {
+        self.send_json(&serde_json::json!({ "type": "relay_assign" }))?;
+        let v = self.recv_reply("relay_assign")?;
+        let host = v
+            .get("host")
+            .and_then(|x| x.as_str())
+            .context("relay_assign missing host")?;
+        let port = v
+            .get("port")
+            .and_then(|x| x.as_u64())
+            .context("relay_assign missing port")? as u16;
+        let channel = v
+            .get("channel")
+            .and_then(|x| x.as_str())
+            .context("relay_assign missing channel")?
+            .to_owned();
+        let addr: SocketAddr = format!("{host}:{port}").parse().context("bad relay addr")?;
+        Ok((addr, channel))
+    }
 }
 
 #[cfg(test)]

@@ -34,6 +34,12 @@ pub const SCREEN_SHARE: char = '\u{e14f}';
 pub const SHIELD: char = '\u{e158}';
 pub const SLIDERS: char = '\u{e29a}';
 pub const CHEVRON_RIGHT: char = '\u{e06f}';
+pub const VOLUME_2: char = '\u{e1ab}';
+pub const VOLUME_X: char = '\u{e1ac}';
+pub const PENCIL: char = '\u{e1f9}';
+pub const APP_WINDOW: char = '\u{e426}';
+pub const ROTATE_CW: char = '\u{e149}';
+pub const ZOOM_IN: char = '\u{e1b6}';
 
 pub fn icon_font(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name(Arc::from(ICONS_FAMILY)))

@@ -3,11 +3,12 @@ use super::shell;
 use super::theme::{self, Palette};
 use super::views::{connecting, idle, live, overlays};
 use super::widgets;
-pub use super::{FrameSlot, Session, Stage, Status};
+pub use super::{FrameSlot, PortmapRule, Session, SessionCmd, Stage, Status, TransferRecord};
 use egui::{pos2, vec2, Align, Color32, CornerRadius, Layout, Rect, Sense, Stroke};
+use leeconnect::annotation::StrokePath;
 use leeconnect::capabilities::Capabilities;
 use leeconnect::input::InputEvent;
-use leeconnect::msg::ControlMsg;
+use leeconnect::msg::{AppEntry, ControlMsg, MonitorDesc};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -51,6 +52,10 @@ pub struct UiConfig {
     pub rotation_deg: i32,
     #[serde(default = "default_zoom")]
     pub zoom: f32,
+    #[serde(default)]
+    pub prefer_hw_enc: bool,
+    #[serde(default)]
+    pub follow_mode: bool,
 }
 
 fn default_true() -> bool {
@@ -72,8 +77,19 @@ impl Default for UiConfig {
             show_remote_cursor: true,
             rotation_deg: 0,
             zoom: 1.0,
+            prefer_hw_enc: false,
+            follow_mode: false,
         }
     }
+}
+
+#[derive(Clone, Copy)]
+pub struct LocalEnvCaps {
+    pub nvenc: bool,
+    pub mf_h264_hw: bool,
+    pub mf_hevc_hw: bool,
+    pub vigem: bool,
+    pub mumu: bool,
 }
 
 pub struct GuiApp {
@@ -89,7 +105,26 @@ pub struct GuiApp {
     pub rtt_ms: Arc<AtomicU64>,
     pub input_tx: Sender<InputEvent>,
     pub ctrl_tx: Sender<ControlMsg>,
+    pub cmd_tx: Sender<SessionCmd>,
     pub sys_results: Arc<Mutex<Vec<(String, bool, String)>>>,
+    pub monitors: Arc<Mutex<(Vec<MonitorDesc>, usize)>>,
+    pub remote_apps: Arc<Mutex<Vec<AppEntry>>>,
+    pub file_history: Arc<Mutex<Vec<TransferRecord>>>,
+    pub portmap_rules: Arc<Mutex<Vec<PortmapRule>>>,
+    pub audio_enabled: Arc<AtomicBool>,
+    pub gamepad_enabled: Arc<AtomicBool>,
+    pub ca_override: Arc<Mutex<Option<Vec<u8>>>>,
+    pub sni_override: Arc<Mutex<Option<String>>>,
+    pub pair_result: Arc<Mutex<Option<Result<(SocketAddr, Vec<u8>), String>>>>,
+    pub pair_signal_addr: String,
+    pub pair_in_flight: bool,
+    pub nat_probe_result: Arc<Mutex<Option<(leeconnect::ice::NatType, Option<SocketAddr>)>>>,
+    pub nat_probing: bool,
+    pub stun_server_input: String,
+    pub relay_addr_input: String,
+    pub env_caps: LocalEnvCaps,
+    pub rtt_history: Vec<u64>,
+    pub last_rtt_sample: Instant,
     pub tex: Option<egui::TextureHandle>,
     pub last_seq: u64,
     pub selected_device: usize,
@@ -101,15 +136,35 @@ pub struct GuiApp {
     pub show_info_popover: bool,
     pub show_more_menu: bool,
     pub show_file_panel: bool,
+    pub show_apps_modal: bool,
+    pub show_portmap_modal: bool,
+    pub show_power_modal: bool,
+    pub show_monitor_popover: bool,
+    pub show_net_modal: bool,
+    pub pending_power_action: Option<(&'static str, &'static str)>,
+    pub portmap_local_input: String,
+    pub portmap_remote_input: String,
+    pub upload_path_input: String,
+    pub download_path_input: String,
+    pub app_search_query: String,
     pub show_disconnect_confirm: bool,
     pub show_pair_modal: bool,
     pub pair_code_input: String,
     pub is_fullscreen: bool,
     pub quality_preset: usize,
+    pub prefer_hw_enc: bool,
     pub sync_clipboard: bool,
     pub play_remote_audio: bool,
     pub show_remote_cursor: bool,
     pub privacy_screen_active: bool,
+    pub relative_mouse_mode: bool,
+    pub follow_mode: bool,
+    pub annotation_mode: bool,
+    pub annotation_color: [u8; 4],
+    pub annotations: Vec<StrokePath>,
+    pub active_stroke: Option<StrokePath>,
+    pub last_follow_size: (u32, u32),
+    pub last_follow_sent: Instant,
     pub rotation_deg: i32,
     pub zoom: f32,
     pub last_mouse_activity: Instant,
@@ -126,14 +181,23 @@ impl GuiApp {
         sess: Session,
         input_tx: Sender<InputEvent>,
         ctrl_tx: Sender<ControlMsg>,
+        cmd_tx: Sender<SessionCmd>,
         host: SocketAddr,
         mode: AppMode,
     ) -> Self {
         theme::install_fonts(&cc.egui_ctx);
 
         let cfg = Self::load_config();
+        sess.audio_enabled.store(cfg.play_remote_audio, Ordering::Relaxed);
         let palette = if cfg.dark_theme { theme::DARK } else { theme::LIGHT };
         theme::apply(&cc.egui_ctx, &palette);
+        let env_caps = LocalEnvCaps {
+            nvenc: leeconnect::encoder::is_nvenc_available(),
+            mf_h264_hw: leeconnect::encoder::has_mf_h264_hw(),
+            mf_hevc_hw: leeconnect::encoder::has_mf_hevc_hw(),
+            vigem: leeconnect::gamepad::is_vigem_available(),
+            mumu: leeconnect::mumu::is_mumu_available(),
+        };
 
         Self {
             host,
@@ -147,8 +211,27 @@ impl GuiApp {
             bytes_rx: sess.bytes_rx,
             rtt_ms: sess.rtt_ms,
             sys_results: sess.sys_results,
+            monitors: sess.monitors,
+            remote_apps: sess.remote_apps,
+            file_history: sess.file_history,
+            portmap_rules: sess.portmap_rules,
+            audio_enabled: sess.audio_enabled,
+            gamepad_enabled: sess.gamepad_enabled,
+            ca_override: sess.ca_override,
+            sni_override: sess.sni_override,
+            pair_result: Arc::new(Mutex::new(None)),
+            pair_signal_addr: leeconnect::pair::DEFAULT_SIGNAL.to_owned(),
+            pair_in_flight: false,
+            nat_probe_result: Arc::new(Mutex::new(None)),
+            nat_probing: false,
+            stun_server_input: "223.5.5.5:3478".to_owned(),
+            relay_addr_input: "127.0.0.1:9800".to_owned(),
+            env_caps,
+            rtt_history: vec![18; 24],
+            last_rtt_sample: Instant::now(),
             input_tx,
             ctrl_tx,
+            cmd_tx,
             tex: None,
             last_seq: 0,
             selected_device: 1, // Default selected is "工位电脑"
@@ -179,15 +262,35 @@ impl GuiApp {
             show_info_popover: false,
             show_more_menu: false,
             show_file_panel: false,
+            show_apps_modal: false,
+            show_portmap_modal: false,
+            show_power_modal: false,
+            show_monitor_popover: false,
+            show_net_modal: false,
+            pending_power_action: None,
+            portmap_local_input: "8080".to_owned(),
+            portmap_remote_input: "80".to_owned(),
+            upload_path_input: String::new(),
+            download_path_input: String::new(),
+            app_search_query: String::new(),
             show_disconnect_confirm: false,
             show_pair_modal: false,
             pair_code_input: String::new(),
             is_fullscreen: false,
             quality_preset: cfg.quality_preset,
+            prefer_hw_enc: cfg.prefer_hw_enc,
             sync_clipboard: cfg.sync_clipboard,
             play_remote_audio: cfg.play_remote_audio,
             show_remote_cursor: cfg.show_remote_cursor,
             privacy_screen_active: false,
+            relative_mouse_mode: false,
+            follow_mode: cfg.follow_mode,
+            annotation_mode: false,
+            annotation_color: [255, 59, 48, 255],
+            annotations: Vec::new(),
+            active_stroke: None,
+            last_follow_size: (0, 0),
+            last_follow_sent: Instant::now(),
             rotation_deg: cfg.rotation_deg,
             zoom: cfg.zoom,
             last_mouse_activity: Instant::now(),
@@ -257,8 +360,47 @@ impl GuiApp {
         let _ = self.ctrl_tx.send(ControlMsg::SystemAction { action: action.to_owned() });
     }
 
-    /// Drain host system-action results into toasts. Call once per UI frame.
+    /// Drain host system-action results + completed pairing attempts into toasts.
     pub fn drain_sys_results(&mut self) {
+        let pair_res = self.pair_result.lock().unwrap().take();
+        if let Some(res) = pair_res {
+            self.pair_in_flight = false;
+            match res {
+                Ok((addr, ca)) => {
+                    self.show_pair_modal = false;
+                    self.pair_code_input.clear();
+                    *self.ca_override.lock().unwrap() = Some(ca);
+                    *self.sni_override.lock().unwrap() = Some(addr.ip().to_string());
+                    self.connect_addr(addr);
+                    self.push_toast("配对成功", &format!("正在连接至 {addr}"));
+                }
+                Err(e) => {
+                    self.push_toast("配对失败", &e);
+                }
+            }
+        }
+        let nat_res = self.nat_probe_result.lock().unwrap().take();
+        if let Some((nat_type, mapped)) = nat_res {
+            self.nat_probing = false;
+            let desc = match nat_type {
+                leeconnect::ice::NatType::DirectOrOpen => "公网直连可达",
+                leeconnect::ice::NatType::BehindNat => "处于 NAT 后（支持打洞 / 中继）",
+                leeconnect::ice::NatType::Blocked => "STUN 探测超时（建议使用 UDP 中继）",
+            };
+            let addr_str = mapped.map(|a| format!(" ({a})")).unwrap_or_default();
+            self.push_toast("NAT 网络探测", &format!("{desc}{addr_str}"));
+            *self.nat_probe_result.lock().unwrap() = Some((nat_type, mapped));
+        }
+        if self.last_rtt_sample.elapsed().as_millis() >= 800 {
+            self.last_rtt_sample = Instant::now();
+            let rtt = self.rtt_ms.load(Ordering::Relaxed);
+            if rtt > 0 {
+                if self.rtt_history.len() >= 24 {
+                    self.rtt_history.remove(0);
+                }
+                self.rtt_history.push(rtt);
+            }
+        }
         let pending = {
             let mut q = self.sys_results.lock().unwrap();
             if q.is_empty() {
@@ -267,9 +409,55 @@ impl GuiApp {
             std::mem::take(&mut *q)
         };
         for (action, ok, detail) in pending {
-            let title = if ok { "系统操作" } else { "操作失败" };
+            let title = if ok { "操作成功" } else { "操作失败" };
             self.push_toast(title, &format!("{action} → {detail}"));
         }
+    }
+
+    /// Start async pairing code redemption against `signaling.js`.
+    pub fn redeem_pair_code(&mut self) {
+        if self.pair_in_flight || self.pair_code_input.len() != 6 {
+            return;
+        }
+        self.pair_in_flight = true;
+        let code = self.pair_code_input.clone();
+        let signal = self.pair_signal_addr.clone();
+        let out = self.pair_result.clone();
+        std::thread::spawn(move || {
+            let res = (|| -> anyhow::Result<(SocketAddr, Vec<u8>)> {
+                let mut sig = leeconnect::pair::Signaling::open(&signal)?;
+                let serial = leeconnect::pair::gen_serial(leeconnect::pair::DEFAULT_SECRET, "LEE-CTRL-GUI");
+                sig.register("LEE-CTRL-GUI", &serial, "lee-ctrl-gui", "", &[])?;
+                sig.pair_redeem(&code)
+            })();
+            *out.lock().unwrap() = Some(res.map_err(|e| e.to_string()));
+        });
+    }
+
+    pub fn start_nat_probe(&mut self) {
+        if self.nat_probing {
+            return;
+        }
+        self.nat_probing = true;
+        let addr_str = self.stun_server_input.clone();
+        let out = self.nat_probe_result.clone();
+        std::thread::spawn(move || {
+            let res = match addr_str.parse::<SocketAddr>() {
+                Ok(addr) => leeconnect::ice::detect_nat_posture(addr),
+                Err(_) => (leeconnect::ice::NatType::Blocked, None),
+            };
+            *out.lock().unwrap() = Some(res);
+        });
+    }
+
+    pub fn send_quality_config(&self) {
+        let prof = leeconnect::encoder::QualityProfile::from_preset(self.quality_preset);
+        let _ = self.ctrl_tx.send(ControlMsg::QualityConfig {
+            bitrate_bps: prof.bitrate_bps,
+            fps: prof.fps,
+            chroma_444: prof.chroma == leeconnect::encoder::ChromaSampling::Yuv444,
+            hdr: prof.hdr,
+        });
     }
 
     pub fn toggle_theme(&mut self, ctx: &egui::Context) {
@@ -279,11 +467,17 @@ impl GuiApp {
     }
 
     pub fn stop_session(&mut self) {
+        if self.follow_mode {
+            let _ = self.ctrl_tx.send(ControlMsg::RestoreResolution);
+        }
+        let _ = self.ctrl_tx.send(ControlMsg::SystemAction { action: "end".into() });
         self.stop.store(true, Ordering::Relaxed);
         *self.status.lock().unwrap() = Status::Idle;
         self.tex = None;
         self.last_seq = 0;
         self.sidebar_open = true;
+        self.relative_mouse_mode = false;
+        self.annotation_mode = false;
     }
 
     pub fn reconnect(&mut self) {
@@ -291,11 +485,18 @@ impl GuiApp {
     }
 
     pub fn connect_to_selected(&mut self) {
+        *self.ca_override.lock().unwrap() = None;
+        *self.sni_override.lock().unwrap() = None;
         let target_addr = self.devices.get(self.selected_device).map(|d| d.addr).unwrap_or(self.host);
+        self.connect_addr(target_addr);
+    }
+
+    pub fn connect_addr(&mut self, target_addr: SocketAddr) {
         self.stop.store(true, Ordering::Relaxed);
         self.tex = None;
         self.last_seq = 0;
         self.stop = Arc::new(AtomicBool::new(false));
+        self.audio_enabled.store(self.play_remote_audio, Ordering::Relaxed);
 
         *self.status.lock().unwrap() = Status::Connecting {
             stage: Stage::Handshake,
@@ -305,10 +506,21 @@ impl GuiApp {
 
         let (tx, input_rx) = std::sync::mpsc::channel::<InputEvent>();
         self.input_tx = tx;
-        // fresh control channel per session (the old receiver was consumed by the prior thread)
         let (ctx_tx, ctrl_rx) = std::sync::mpsc::channel::<ControlMsg>();
         self.ctrl_tx = ctx_tx;
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<SessionCmd>();
+        self.cmd_tx = cmd_tx;
         self.sys_results.lock().unwrap().clear();
+        self.monitors.lock().unwrap().0.clear();
+        self.remote_apps.lock().unwrap().clear();
+        self.portmap_rules.lock().unwrap().clear();
+
+        // Sync initial audio & quality settings once stream starts
+        let _ = self.ctrl_tx.send(ControlMsg::AudioToggle { enabled: self.play_remote_audio });
+        self.send_quality_config();
+
+        let ca_der = self.ca_override.lock().unwrap().clone();
+        let sni = self.sni_override.lock().unwrap().clone();
 
         Session::spawn(
             target_addr,
@@ -322,7 +534,16 @@ impl GuiApp {
             self.rtt_ms.clone(),
             input_rx,
             ctrl_rx,
+            cmd_rx,
             self.sys_results.clone(),
+            self.monitors.clone(),
+            self.remote_apps.clone(),
+            self.file_history.clone(),
+            self.portmap_rules.clone(),
+            self.audio_enabled.clone(),
+            self.gamepad_enabled.clone(),
+            ca_der,
+            sni,
         );
     }
 
@@ -353,6 +574,8 @@ impl GuiApp {
                 show_remote_cursor: self.show_remote_cursor,
                 rotation_deg: self.rotation_deg,
                 zoom: self.zoom,
+                prefer_hw_enc: self.prefer_hw_enc,
+                follow_mode: self.follow_mode,
             };
             if let Ok(json) = serde_json::to_string_pretty(&cfg) {
                 let _ = std::fs::write(path, json);
@@ -448,6 +671,7 @@ impl GuiApp {
                 is_live,
                 self.sidebar_open,
                 self.show_info_popover,
+                self.show_net_modal,
                 &mut self.search_query,
             );
 
@@ -460,6 +684,9 @@ impl GuiApp {
                 }
                 if action.toggle_theme {
                     self.toggle_theme(ui.ctx());
+                }
+                if action.toggle_net {
+                    self.show_net_modal = !self.show_net_modal;
                 }
             }
 

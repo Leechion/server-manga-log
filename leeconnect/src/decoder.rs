@@ -18,7 +18,11 @@ impl H264Decoder {
     /// Decode one H.264 bitstream frame into BGRA pixels.
     /// Returns None if the decoder needs more input before producing a picture.
     pub fn decode(&mut self, ef: &EncodedFrame) -> Result<Option<DecodedPicture>> {
-        ensure!(ef.format == PixelFormat::H264, "H264Decoder: expected H264, got {:?}", ef.format);
+        ensure!(
+            matches!(ef.format, PixelFormat::H264 | PixelFormat::H264_444),
+            "H264Decoder: expected H264, got {:?}",
+            ef.format
+        );
         use openh264::formats::YUVSource;
         let yuv = self
             .dec

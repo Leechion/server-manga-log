@@ -2,7 +2,7 @@ use super::super::app::GuiApp;
 use super::super::icons;
 use super::super::theme;
 use super::super::widgets::{dev_art, group, group_row, popup_button, push_button, switch, ButtonKind};
-use egui::{pos2, vec2, Align, CornerRadius, Layout, Sense, Stroke, Ui};
+use egui::{vec2, Align, CornerRadius, Layout, Sense, Stroke, Ui};
 
 pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
     let p = app.palette;
@@ -17,7 +17,7 @@ pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.add_space(34.0);
+            ui.add_space(28.0);
 
             let max_w = 540.0;
             let avail_w = ui.available_width();
@@ -33,7 +33,6 @@ pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
 
                     ui.add_space(14.0);
 
-                    // Device Headline (22pt semibold)
                     ui.label(
                         egui::RichText::new(&dev.name)
                             .font(theme::semibold_font(22.0))
@@ -42,7 +41,6 @@ pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
 
                     ui.add_space(4.0);
 
-                    // Status Subtitle (Dot + Text)
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
                         let dot_color = if is_online { p.green } else { p.text_3 };
@@ -63,11 +61,9 @@ pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
                         );
                     });
 
-                    ui.add_space(20.0);
+                    ui.add_space(18.0);
 
-                    // Connect Actions
                     if is_self {
-                        // Self Code Card: [ 本机连接码 482 193 ] [ 拷贝 ]
                         let card_w = 320.0;
                         let card_h = 56.0;
                         let (c_rect, _) = ui.allocate_exact_size(vec2(card_w, card_h), Sense::hover());
@@ -98,7 +94,6 @@ pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
                             }
                         });
                     } else {
-                        // Buttons row: [ 输入连接码… ] [ 连接 ]
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing = vec2(10.0, 0.0);
 
@@ -111,20 +106,18 @@ pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
                                     app.connect_to_selected();
                                 }
                             } else {
-                                // Disabled button
                                 let btn_resp = push_button(ui, &p, "设备离线", ButtonKind::Secondary, true, None);
                                 let _ = btn_resp.on_hover_text("远端设备处于离线状态，请确认对方已开机并启动服务端");
                             }
                         });
                     }
 
-                    ui.add_space(28.0);
+                    ui.add_space(24.0);
 
-                    // Groups 1 & 2: Left aligned inside max_w
                     ui.with_layout(Layout::top_down(Align::Min), |ui| {
                         ui.set_width(max_w);
 
-                        // 2. Group 1: 「设备信息」
+                        // Group 1: 「设备信息」
                         ui.label(
                             egui::RichText::new("设备信息")
                                 .font(theme::semibold_font(12.0))
@@ -149,9 +142,9 @@ pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
                             });
                         });
 
-                        // 3. Group 2: 「连接选项」 (Only for remote devices)
+                        // Group 2: 「连接选项」 (Remote devices)
                         if !is_self {
-                            ui.add_space(24.0);
+                            ui.add_space(20.0);
                             ui.label(
                                 egui::RichText::new("连接选项")
                                     .font(theme::semibold_font(12.0))
@@ -161,11 +154,11 @@ pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
 
                             group(ui, &p, |ui| {
                                 ui.set_width(max_w);
-                                group_row(ui, &p, "画质", false, |ui| {
+                                group_row(ui, &p, "画质与色度档位", false, |ui| {
                                     let label = match app.quality_preset {
-                                        0 => "流畅",
-                                        1 => "均衡",
-                                        _ => "清晰",
+                                        0 => "流畅 · 30fps",
+                                        1 => "均衡 · 60fps",
+                                        _ => "清晰 · 90fps · 4:4:4",
                                     };
                                     if popup_button(ui, &p, label).clicked() {
                                         app.quality_preset = (app.quality_preset + 1) % 3;
@@ -173,8 +166,21 @@ pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
                                     }
                                 });
 
+                                group_row(ui, &p, "优先硬件编码 (MF / NVENC)", true, |ui| {
+                                    if switch(ui, &p, &mut app.prefer_hw_enc).changed() {
+                                        app.save_config();
+                                    }
+                                });
+
+                                group_row(ui, &p, "连接后跟随窗口分辨率", true, |ui| {
+                                    if switch(ui, &p, &mut app.follow_mode).changed() {
+                                        app.save_config();
+                                    }
+                                });
+
                                 group_row(ui, &p, "播放远程声音", true, |ui| {
                                     if switch(ui, &p, &mut app.play_remote_audio).changed() {
+                                        app.audio_enabled.store(app.play_remote_audio, std::sync::atomic::Ordering::Relaxed);
                                         app.save_config();
                                     }
                                 });
@@ -187,7 +193,45 @@ pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
                             });
                         }
 
-                        ui.add_space(40.0);
+                        // Group 3: 「本机能力与网络诊断」
+                        ui.add_space(20.0);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new("本机能力与网络穿透")
+                                    .font(theme::semibold_font(12.0))
+                                    .color(p.text_2),
+                            );
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if ui.link(egui::RichText::new("STUN / 中继设置…").font(theme::text_font(12.0))).clicked() {
+                                    app.show_net_modal = true;
+                                }
+                            });
+                        });
+                        ui.add_space(6.0);
+
+                        group(ui, &p, |ui| {
+                            ui.set_width(max_w);
+                            let enc_str = if app.env_caps.nvenc {
+                                "NVIDIA NVENC + MF 就绪"
+                            } else if app.env_caps.mf_h264_hw {
+                                "Media Foundation 硬编就绪"
+                            } else {
+                                "OpenH264 软编 + HDR 色调映射"
+                            };
+                            let gp_str = if app.env_caps.vigem {
+                                "ViGEmBus + XInput 就绪"
+                            } else {
+                                "XInput 就绪（未装 ViGEmBus）"
+                            };
+                            group_row(ui, &p, "视频编解码能力", false, |ui| {
+                                ui.label(egui::RichText::new(enc_str).font(theme::text_font(12.5)).color(p.text_2));
+                            });
+                            group_row(ui, &p, "虚拟手柄驱动", true, |ui| {
+                                ui.label(egui::RichText::new(gp_str).font(theme::text_font(12.5)).color(p.text_2));
+                            });
+                        });
+
+                        ui.add_space(36.0);
                     });
                 },
             );

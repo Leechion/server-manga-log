@@ -28,6 +28,8 @@ pub enum InputEvent {
     Key { vk: u16, down: bool },
     /// raw scancode (for keys VK can't express reliably, e.g. some layouts)
     Scan { scancode: u16, down: bool, extended: bool },
+    /// Xbox 360 virtual controller state
+    Gamepad(crate::gamepad::GamepadState),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +74,10 @@ impl Injector {
                     f |= KEYBD_EVENT_FLAGS(0x0002); // KEYEVENTF_EXTENDEDKEY
                 }
                 vec![scankey(scancode, down, f)]
+            }
+            InputEvent::Gamepad(_) => {
+                // Virtual gamepad events are routed to `gamepad::VigemInjector` by the host.
+                return Ok(());
             }
         };
         let n = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
@@ -195,6 +201,10 @@ pub fn encode_input(ev: InputEvent) -> Vec<u8> {
             b.push(down as u8);
             b.push(extended as u8);
         }
+        InputEvent::Gamepad(gp) => {
+            b.push(6);
+            b.extend_from_slice(&gp.encode());
+        }
     }
     b
 }
@@ -227,6 +237,7 @@ pub fn decode_input(b: &[u8]) -> Result<InputEvent> {
             down: b[3] != 0,
             extended: b[4] != 0,
         },
+        6 => InputEvent::Gamepad(crate::gamepad::GamepadState::decode(&b[1..])?),
         t => anyhow::bail!("unknown input tag {t}"),
     })
 }

@@ -9,6 +9,7 @@ pub struct ShellAction {
     pub toggle_sidebar: bool,
     pub toggle_info: bool,
     pub toggle_theme: bool,
+    pub toggle_net: bool,
 }
 
 pub fn render_toolbar(
@@ -20,12 +21,14 @@ pub fn render_toolbar(
     is_live: bool,
     sidebar_open: bool,
     show_info_active: bool,
+    show_net_active: bool,
     search_query: &mut String,
 ) -> ShellAction {
     let mut action = ShellAction {
         toggle_sidebar: false,
         toggle_info: false,
         toggle_theme: false,
+        toggle_net: false,
     };
 
     let tb_height = 52.0;
@@ -108,11 +111,11 @@ pub fn render_toolbar(
         });
     });
 
-    // Right side: Window buttons + Search/Info + Theme toggle
+    // Right side: Window buttons + Search/Info + Settings/Net + Theme toggle
     let win_btn_w = 46.0;
     let win_btns_total_w = win_btn_w * 3.0;
 
-    let right_btns_w = if is_live { 80.0 } else { 240.0 };
+    let right_btns_w = if is_live { 118.0 } else { 278.0 };
     let right_x = rect.max.x - win_btns_total_w - right_btns_w;
 
     let mut right_ui = ui.new_child(
@@ -136,6 +139,26 @@ pub fn render_toolbar(
     if t_resp.clicked() {
         action.toggle_theme = true;
     }
+
+    right_ui.add_space(4.0);
+
+    // Network & Hardware Capabilities Settings button
+    let (n_rect, n_resp) = right_ui.allocate_exact_size(vec2(30.0, 28.0), Sense::click());
+    if n_resp.hovered() {
+        right_ui.painter().rect_filled(n_rect, CornerRadius::same(6), p.hover);
+    } else if show_net_active {
+        right_ui.painter().rect_filled(
+            n_rect,
+            CornerRadius::same(6),
+            p.accent.gamma_multiply(0.14),
+        );
+    }
+    let n_color = if show_net_active { p.accent } else { p.text_2 };
+    icons::draw_icon(right_ui.painter(), n_rect.center(), icons::SLIDERS, 16.0, n_color);
+    if n_resp.clicked() {
+        action.toggle_net = true;
+    }
+    let _ = n_resp.on_hover_text("网络穿透、中继与硬件设置");
 
     right_ui.add_space(6.0);
 

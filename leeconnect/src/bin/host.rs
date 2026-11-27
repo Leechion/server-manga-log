@@ -65,32 +65,150 @@ async fn main() -> Result<()> {
         .iter()
         .position(|a| a == "--pair")
         .and_then(|p| argv.get(p + 1))
+        .filter(|s| !s.starts_with("--"))
         .cloned()
         .unwrap_or_else(|| leeconnect::pair::DEFAULT_SIGNAL.to_owned());
+    let stun_override: Option<String> = argv
+        .iter()
+        .position(|a| a == "--stun")
+        .and_then(|p| argv.get(p + 1))
+        .cloned();
+
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), PORT);
+    let udp_sock = std::net::UdpSocket::bind(addr).context("bind host udp")?;
+    let punch_sock = udp_sock.try_clone().context("clone host udp")?;
+
+    let public_ep: Option<SocketAddr> = if pair_mode {
+        let stun_str = stun_override
+            .as_deref()
+            .unwrap_or(leeconnect::ice::DEFAULT_STUN_SERVER);
+        leeconnect::ice::resolve_stun(stun_str).and_then(|stun_addr| {
+            leeconnect::ice::stun_probe_on_socket(
+                &punch_sock,
+                stun_addr,
+                std::time::Duration::from_millis(800),
+            )
+            .ok()
+        })
+    } else {
+        None
+    };
 
     let lan_ip = leeconnect::pair::local_ip().map(|i| i.to_string());
-    let extra_sans: Vec<String> = lan_ip.iter().cloned().collect();
+    let mut extra_sans: Vec<String> = lan_ip.iter().cloned().collect();
+    if let Some(pub_addr) = public_ep {
+        extra_sans.push(pub_addr.ip().to_string());
+    }
     let (sc, ca_der) = transport::gen_server_config_persisted_extra(&extra_sans)?;
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), PORT);
-    let server = transport::bind_server(addr, sc)?;
+    let server = transport::bind_server_with_socket(udp_sock, sc)?;
     println!("[host] listening on {addr} (all interfaces)");
 
     let endpoint_hint = lan_ip
         .map(|ip| format!("{ip}:{PORT}"))
         .unwrap_or_else(|| format!("127.0.0.1:{PORT}"));
 
-    let mut _sig = None;
+    let sig_stop = Arc::new(AtomicBool::new(false));
+    let relay_bridge: Arc<Mutex<Option<leeconnect::ice::RelayUdpBridge>>> =
+        Arc::new(Mutex::new(None));
+
     if pair_mode {
+        let host_name = argv
+            .iter()
+            .position(|a| a == "--name")
+            .and_then(|p| argv.get(p + 1))
+            .cloned()
+            .or_else(|| std::env::var("COMPUTERNAME").ok())
+            .unwrap_or_else(|| "lee-host".to_owned());
+        let dev_id = argv
+            .iter()
+            .position(|a| a == "--id")
+            .and_then(|p| argv.get(p + 1))
+            .cloned()
+            .unwrap_or_else(|| format!("HOST-{host_name}"));
         let mut s = leeconnect::pair::Signaling::open(&signal)
             .with_context(|| format!("open signaling {signal}"))?;
-        let serial = leeconnect::pair::gen_serial(leeconnect::pair::DEFAULT_SECRET, "LEE-HOST-1");
-        s.register("LEE-HOST-1", &serial, "lee-host", &endpoint_hint, &ca_der)?;
+        let serial = leeconnect::pair::gen_serial(leeconnect::pair::DEFAULT_SECRET, &dev_id);
+        let pub_str = public_ep.map(|p| p.to_string());
+        s.register_with_public(
+            &dev_id,
+            &serial,
+            &host_name,
+            &endpoint_hint,
+            pub_str.as_deref(),
+            &ca_der,
+        )?;
         let code = s.pair_create()?;
-        println!("[host] PAIRING CODE: {code}  (endpoint {endpoint_hint})");
-        _sig = Some(s);
+        if let Some(pub_addr) = public_ep {
+            println!("[host] PAIRING CODE: {code}  (id {dev_id}, lan {endpoint_hint}, stun {pub_addr})");
+        } else {
+            println!("[host] PAIRING CODE: {code}  (id {dev_id}, lan {endpoint_hint})");
+        }
+
+        let sig_stop_t = sig_stop.clone();
+        let relay_slot = relay_bridge.clone();
+        std::thread::Builder::new()
+            .name("host-signaling".into())
+            .spawn(move || {
+                let mut last_hb = std::time::Instant::now();
+                while !sig_stop_t.load(Ordering::Relaxed) {
+                    if last_hb.elapsed() >= std::time::Duration::from_secs(15) {
+                        if s.heartbeat().is_err() {
+                            break;
+                        }
+                        last_hb = std::time::Instant::now();
+                    }
+                    match s.recv_event(std::time::Duration::from_millis(250)) {
+                        Ok(Some(v)) => {
+                            let ty = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
+                            match ty {
+                                "pair_open" => {
+                                    println!("[host] controller paired, awaiting QUIC/ICE/Relay...");
+                                }
+                                "ice" => {
+                                    if let Some(cand) = v.get("candidate").and_then(|x| x.as_str()) {
+                                        if let Ok(peer_addr) = cand.parse::<SocketAddr>() {
+                                            println!("[host] ICE punch -> {peer_addr}");
+                                            leeconnect::ice::send_udp_punch(&punch_sock, peer_addr, 4);
+                                        }
+                                    }
+                                }
+                                "relay_assign" => {
+                                    if let Ok((relay_addr, channel)) = s.parse_relay_assign(&v) {
+                                        let local_target = SocketAddr::new(
+                                            IpAddr::V4(Ipv4Addr::LOCALHOST),
+                                            PORT,
+                                        );
+                                        match leeconnect::ice::RelayUdpBridge::connect_host(
+                                            relay_addr,
+                                            &channel,
+                                            local_target,
+                                        ) {
+                                            Ok(bridge) => {
+                                                println!(
+                                                    "[host] relay bridge active: {relay_addr} ch={channel}"
+                                                );
+                                                *relay_slot.lock().unwrap() = Some(bridge);
+                                            }
+                                            Err(e) => eprintln!("[host] relay bridge failed: {e}"),
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            eprintln!("[host] signaling closed: {e}");
+                            break;
+                        }
+                    }
+                }
+            })?;
     }
 
     let conn = server.accept().await.context("no incoming")?.await?;
+    sig_stop.store(true, Ordering::Relaxed);
+    let _keep_relay_alive = relay_bridge;
     println!("[host] controller connected");
     let (mut send, mut recv) = conn.accept_bi().await?;
 

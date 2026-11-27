@@ -48,14 +48,14 @@ pub fn render_body(app: &mut GuiApp, ui: &mut Ui) {
                         ui.painter().circle_filled(d_rect.center(), 3.5, dot_color);
 
                         let status_str = if is_self {
-                            "本机 · 正常运行 · Windows 11"
+                            "本机 · 正常运行 · Windows 11".to_owned()
                         } else if is_online {
-                            "在线 · 局域网 · Windows 11"
+                            format!("{} · Windows", dev.kind)
                         } else {
-                            "离线 · 上次在线 11-21 14:02"
+                            "离线 · 上次在线 11-21 14:02".to_owned()
                         };
                         ui.label(
-                            egui::RichText::new(status_str)
+                            egui::RichText::new(&status_str)
                                 .font(theme::text_font(12.5))
                                 .color(p.text_2),
                         );

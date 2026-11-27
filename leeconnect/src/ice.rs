@@ -3,8 +3,12 @@
 //!   [4B magic 'LEEC'][1B type][2B channel BE][4B len BE][payload]
 
 use anyhow::{ensure, Context, Result};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
-use std::time::Duration;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+pub const DEFAULT_STUN_SERVER: &str = "stun.miwifi.com:3478";
 
 const STUN_MAGIC_COOKIE: u32 = 0x2112_A442;
 const STUN_BINDING_REQUEST: u16 = 0x0001;
@@ -77,9 +81,21 @@ pub fn parse_stun_binding_response(buf: &[u8], expected_tx_id: &[u8; 12]) -> Res
     mapped.context("no MAPPED-ADDRESS or XOR-MAPPED-ADDRESS in STUN response")
 }
 
-/// Discover our server-reflexive public address via a STUN server.
-pub fn stun_probe(stun_server: SocketAddr, timeout: Duration) -> Result<SocketAddr> {
-    let sock = UdpSocket::bind("0.0.0.0:0").context("bind udp for STUN")?;
+/// Resolve a `host:port` STUN address to an IPv4 `SocketAddr`.
+pub fn resolve_stun(addr: &str) -> Option<SocketAddr> {
+    addr.to_socket_addrs()
+        .ok()?
+        .find(|a| a.is_ipv4())
+}
+
+/// Discover our server-reflexive public address using an existing `UdpSocket`
+/// (e.g. the same socket that will later be handed to `quinn::Endpoint`).
+pub fn stun_probe_on_socket(
+    sock: &UdpSocket,
+    stun_server: SocketAddr,
+    timeout: Duration,
+) -> Result<SocketAddr> {
+    let prev_timeout = sock.read_timeout().ok().flatten();
     sock.set_read_timeout(Some(timeout))?;
     let mut tx_id = [0u8; 12];
     let nanos = std::time::SystemTime::now()
@@ -92,8 +108,37 @@ pub fn stun_probe(stun_server: SocketAddr, timeout: Duration) -> Result<SocketAd
     let req = build_stun_binding_request(tx_id);
     sock.send_to(&req, stun_server).context("STUN send_to")?;
     let mut buf = [0u8; 512];
-    let (n, _) = sock.recv_from(&mut buf).context("STUN recv_from")?;
-    parse_stun_binding_response(&buf[..n], &tx_id)
+    let deadline = Instant::now() + timeout;
+    let res = loop {
+        let rem = deadline.saturating_duration_since(Instant::now());
+        if rem.is_zero() {
+            break Err(anyhow::anyhow!("STUN recv_from timeout"));
+        }
+        let _ = sock.set_read_timeout(Some(rem));
+        match sock.recv_from(&mut buf) {
+            Ok((n, _)) => {
+                if let Ok(mapped) = parse_stun_binding_response(&buf[..n], &tx_id) {
+                    break Ok(mapped);
+                }
+            }
+            Err(e) => break Err(anyhow::anyhow!("STUN recv_from: {e}")),
+        }
+    };
+    let _ = sock.set_read_timeout(prev_timeout);
+    res
+}
+
+/// Discover our server-reflexive public address via a STUN server.
+pub fn stun_probe(stun_server: SocketAddr, timeout: Duration) -> Result<SocketAddr> {
+    let sock = UdpSocket::bind("0.0.0.0:0").context("bind udp for STUN")?;
+    stun_probe_on_socket(&sock, stun_server, timeout)
+}
+
+/// Send small non-QUIC UDP punch packets to open a NAT pinhole toward `peer`.
+pub fn send_udp_punch(sock: &UdpSocket, peer: SocketAddr, count: usize) {
+    for _ in 0..count {
+        let _ = sock.send_to(b"LEECPUNCH", peer);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,6 +264,131 @@ impl RelayClient {
     }
 }
 
+/// Transparent localhost UDP <-> `server/relay.js` bridge so QUIC (`quinn`) can
+/// run unmodified over the UDP relay when direct P2P hole-punching fails.
+pub struct RelayUdpBridge {
+    local_addr: SocketAddr,
+    stop: Arc<AtomicBool>,
+}
+
+impl RelayUdpBridge {
+    /// Controller side: bind a local UDP port (`local_addr()`); `quinn` connects to it.
+    pub fn connect_client(relay_server: SocketAddr, channel_name: &str) -> Result<Self> {
+        Self::spawn_bridge(relay_server, channel_name, None)
+    }
+
+    /// Host side: bridge packets from `relay_server` directly to `target_local_quic` (e.g. `127.0.0.1:44330`).
+    pub fn connect_host(
+        relay_server: SocketAddr,
+        channel_name: &str,
+        target_local_quic: SocketAddr,
+    ) -> Result<Self> {
+        Self::spawn_bridge(relay_server, channel_name, Some(target_local_quic))
+    }
+
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+
+    fn spawn_bridge(
+        relay_server: SocketAddr,
+        channel_name: &str,
+        initial_peer: Option<SocketAddr>,
+    ) -> Result<Self> {
+        let local_sock = UdpSocket::bind("127.0.0.1:0").context("bind local relay bridge")?;
+        let local_addr = local_sock.local_addr()?;
+        local_sock.set_read_timeout(Some(Duration::from_millis(200)))?;
+
+        let relay_sock = UdpSocket::bind("0.0.0.0:0").context("bind external relay socket")?;
+        relay_sock.set_read_timeout(Some(Duration::from_millis(200)))?;
+
+        let channel = channel_id(channel_name);
+        let hb_pkt = RelayPacket {
+            ptype: 4,
+            channel,
+            payload: Vec::new(),
+        }
+        .encode();
+        relay_sock.send_to(&hb_pkt, relay_server)?;
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let peer_slot = Arc::new(Mutex::new(initial_peer));
+
+        let local_sock_in = local_sock.try_clone()?;
+        let relay_sock_out = relay_sock.try_clone()?;
+        let stop_out = stop.clone();
+        let peer_out = peer_slot.clone();
+        std::thread::Builder::new()
+            .name("relay-out".into())
+            .spawn(move || {
+                let mut buf = vec![0u8; 65535];
+                let mut last_hb = Instant::now();
+                while !stop_out.load(Ordering::Relaxed) {
+                    if last_hb.elapsed() >= Duration::from_secs(15) {
+                        let _ = relay_sock_out.send_to(&hb_pkt, relay_server);
+                        last_hb = Instant::now();
+                    }
+                    match local_sock.recv_from(&mut buf) {
+                        Ok((n, src)) => {
+                            let mut guard = peer_out.lock().unwrap();
+                            if guard.is_none() {
+                                *guard = Some(src);
+                            }
+                            drop(guard);
+                            let pkt = RelayPacket {
+                                ptype: 0,
+                                channel,
+                                payload: buf[..n].to_vec(),
+                            };
+                            let _ = relay_sock_out.send_to(&pkt.encode(), relay_server);
+                        }
+                        Err(e)
+                            if matches!(
+                                e.kind(),
+                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                            ) => {}
+                        Err(_) => break,
+                    }
+                }
+            })?;
+
+        let stop_in = stop.clone();
+        std::thread::Builder::new()
+            .name("relay-in".into())
+            .spawn(move || {
+                let mut buf = vec![0u8; 65535];
+                while !stop_in.load(Ordering::Relaxed) {
+                    match relay_sock.recv_from(&mut buf) {
+                        Ok((n, src)) if src == relay_server => {
+                            if let Ok(pkt) = RelayPacket::decode(&buf[..n]) {
+                                if pkt.ptype == 0 && pkt.channel == channel {
+                                    if let Some(target) = *peer_slot.lock().unwrap() {
+                                        let _ = local_sock_in.send_to(&pkt.payload, target);
+                                    }
+                                }
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(e)
+                            if matches!(
+                                e.kind(),
+                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                            ) => {}
+                        Err(_) => break,
+                    }
+                }
+            })?;
+
+        Ok(Self { local_addr, stop })
+    }
+}
+
+impl Drop for RelayUdpBridge {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,5 +451,60 @@ mod tests {
     fn channel_id_deterministic() {
         assert_eq!(channel_id("42"), 42);
         assert_eq!(channel_id("a7f3bc12"), channel_id("a7f3bc12"));
+    }
+
+    #[test]
+    fn relay_bridge_forwards_both_directions() {
+        // Mock relay.js server on localhost
+        let relay = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let relay_addr = relay.local_addr().unwrap();
+        relay.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+
+        let host_quic = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let host_quic_addr = host_quic.local_addr().unwrap();
+        host_quic.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+
+        let ctrl_quic = UdpSocket::bind("127.0.0.1:0").unwrap();
+        ctrl_quic.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+
+        let _host_bridge = RelayUdpBridge::connect_host(relay_addr, "chan1", host_quic_addr).unwrap();
+        let ctrl_bridge = RelayUdpBridge::connect_client(relay_addr, "chan1").unwrap();
+
+        // Relay thread: pair the two bridge endpoints and forward non-control packets
+        let relay_handle = std::thread::spawn(move || {
+            let mut peers: Vec<SocketAddr> = Vec::new();
+            let mut buf = [0u8; 2048];
+            for _ in 0..8 {
+                let Ok((n, src)) = relay.recv_from(&mut buf) else { break };
+                let Ok(pkt) = RelayPacket::decode(&buf[..n]) else { continue };
+                if pkt.ptype == 4 {
+                    if !peers.contains(&src) {
+                        peers.push(src);
+                    }
+                } else {
+                    for &p in &peers {
+                        if p != src {
+                            let _ = relay.send_to(&buf[..n], p);
+                        }
+                    }
+                }
+            }
+        });
+
+        // Give heartbeats a moment to register both peers
+        std::thread::sleep(Duration::from_millis(60));
+        ctrl_quic.send_to(b"ping", ctrl_bridge.local_addr()).unwrap();
+
+        let mut buf = [0u8; 64];
+        let (n, from_host_bridge) = host_quic.recv_from(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"ping");
+
+        host_quic.send_to(b"pong", from_host_bridge).unwrap();
+        let (n2, _) = ctrl_quic.recv_from(&mut buf).unwrap();
+        assert_eq!(&buf[..n2], b"pong");
+
+        drop(ctrl_bridge);
+        drop(_host_bridge);
+        let _ = relay_handle.join();
     }
 }

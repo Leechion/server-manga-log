@@ -38,8 +38,40 @@ wss.on('connection', (ws, req) => {
       case 'register': { // 被控端上线：DEVICE_ID + SERIAL 本地校验
         if (!verifySerial(m.serial, m.device_id)) return send(ws, 'auth_fail', {});
         dev = m.device_id;
-        devices.set(dev, { ws, name: m.name || 'unnamed', serial: m.serial, last_seen: Date.now(), endpoint: m.endpoint || null, ca: m.ca || null });
+        devices.set(dev, {
+          ws,
+          name: m.name || 'unnamed',
+          serial: m.serial,
+          account: m.account || 'default',
+          last_seen: Date.now(),
+          endpoint: m.endpoint || null,
+          public_endpoint: m.public_endpoint || null,
+          ca: m.ca || null,
+        });
         return send(ws, 'registered', { device_id: dev });
+      }
+      case 'device_list': { // 查询同账号下的在线被控端列表
+        const acct = m.account || 'default';
+        const list = [];
+        for (const [id, d] of devices) {
+          if (d.ws.readyState === 1 && d.endpoint && d.account === acct) {
+            list.push({
+              device_id: id,
+              name: d.name,
+              endpoint: d.endpoint,
+              public_endpoint: d.public_endpoint || null,
+            });
+          }
+        }
+        return send(ws, 'device_list', { devices: list });
+      }
+      case 'connect_device': { // 免配对码：按 device_id 一键直连
+        const t = devices.get(m.target_id);
+        if (!t || t.ws.readyState !== 1) return send(ws, 'pair_fail', { reason: 'offline' });
+        const initiator = m.controller_id || dev || req.socket.remoteAddress;
+        send(t.ws, 'pair_open', { controller: initiator, features: entitlements(t.serial, m.target_id).features });
+        ws._peer = m.target_id; t.ws._peer = dev;
+        return send(ws, 'pair_ok', { target: m.target_id, endpoint: t.endpoint || null, public_endpoint: t.public_endpoint || null, ca: t.ca || null });
       }
       case 'pair_create': { // 被控端生成配对码
         const code = String(Math.floor(100000 + Math.random() * 900000));
@@ -55,8 +87,8 @@ wss.on('connection', (ws, req) => {
         if (!t || t.ws.readyState !== 1) return send(ws, 'pair_fail', { reason: 'offline' });
         send(t.ws, 'pair_open', { controller: p.initiator, features: entitlements(t.serial, p.target).features });
         ws._peer = p.target; t.ws._peer = dev;
-        // hand the controller the host's QUIC endpoint + CA root for a direct connection
-        return send(ws, 'pair_ok', { target: p.target, endpoint: t.endpoint || null, ca: t.ca || null });
+        // hand the controller the host's QUIC endpoint + optional STUN public endpoint + CA root
+        return send(ws, 'pair_ok', { target: p.target, endpoint: t.endpoint || null, public_endpoint: t.public_endpoint || null, ca: t.ca || null });
       }
       case 'offer': case 'answer': case 'ice': { // SDP/ICE 透传给对端
         const t = devices.get(ws._peer);
@@ -69,7 +101,9 @@ wss.on('connection', (ws, req) => {
       }
       case 'relay_assign': { // 打洞失败 → 分配中继
         const t = devices.get(ws._peer); if (!t) return send(ws, 'error', { msg: 'no_peer' });
-        const c = { host: process.env.RELAY_HOST || SIGNAL_HOST, port: Number(process.env.RELAY_PORT || 9800), channel: Math.random().toString(36).slice(2, 10) };
+        const reqHost = (req.headers.host || '').split(':')[0];
+        const relayHost = process.env.RELAY_HOST || (SIGNAL_HOST !== '0.0.0.0' ? SIGNAL_HOST : reqHost);
+        const c = { host: relayHost, port: Number(process.env.RELAY_PORT || 9800), channel: Math.random().toString(36).slice(2, 10) };
         send(t.ws, 'relay_assign', c); return send(ws, 'relay_assign', c);
       }
       default: return send(ws, 'error', { msg: 'unknown_type', type: m.type });

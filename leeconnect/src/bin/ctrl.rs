@@ -15,14 +15,12 @@ const WANT_FRAMES: u32 = 12;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // --pair <code> [signal]: resolve the host via signaling (LAN discovery, #3),
+    // --pair <code> [signal]: resolve the host via signaling (LAN / STUN P2P / UDP Relay),
     // otherwise connect directly to 127.0.0.1 (local test).
     let argv: Vec<String> = std::env::args().collect();
-    let mut addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), PORT);
-    let mut ca_der;
-    let mut sni = transport::SNI.to_owned();
+    let mut _relay_bridge: Option<leeconnect::ice::RelayUdpBridge> = None;
 
-    if let Some(pos) = argv.iter().position(|a| a == "--pair") {
+    let conn = if let Some(pos) = argv.iter().position(|a| a == "--pair") {
         let code = argv.get(pos + 1).cloned().unwrap_or_default();
         let signal = argv
             .get(pos + 2)
@@ -31,18 +29,24 @@ async fn main() -> Result<()> {
         let mut s = leeconnect::pair::Signaling::open(&signal)?;
         let serial = leeconnect::pair::gen_serial(leeconnect::pair::DEFAULT_SECRET, "LEE-CTRL-9");
         s.register("LEE-CTRL-9", &serial, "lee-ctrl", "", &[])?;
-        let (ep, ca) = s.pair_redeem(&code)?;
-        println!("[ctrl] paired via {signal}: host {ep}");
-        addr = ep;
-        ca_der = ca;
-        // connect-by-IP: the leaf carries the host LAN IP as a SAN, so use it for name verification
-        sni = ep.ip().to_string();
+        let pair = s.pair_redeem_full(&code)?;
+        println!(
+            "[ctrl] paired via {signal}: lan={} stun={:?}",
+            pair.lan_endpoint, pair.public_endpoint
+        );
+        let (c, bridge, via) = leeconnect::pair::connect_paired(&mut s, pair, None).await?;
+        _relay_bridge = bridge;
+        println!(
+            "[ctrl] connected via {via}{}",
+            if _relay_bridge.is_some() { " (UDP relay)" } else { "" }
+        );
+        c
     } else {
-        ca_der = transport::load_ca()?; // trust the host's published CA (local test)
-    }
-
-    let client = transport::client_endpoint(&ca_der)?;
-    let conn = client.connect(addr, &sni)?.await?;
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), PORT);
+        let ca_der = transport::load_ca()?; // trust the host's published CA (local test)
+        let client = transport::client_endpoint(&ca_der)?;
+        client.connect(addr, transport::SNI)?.await?
+    };
     println!("[ctrl] connected to host");
 
     let (mut send, mut recv) = conn.open_bi().await?;

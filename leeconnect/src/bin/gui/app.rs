@@ -30,6 +30,8 @@ pub struct DeviceRow {
     pub online: bool,
     pub kind: &'static str,
     pub addr: SocketAddr,
+    pub device_id: Option<String>,
+    pub public_addr: Option<SocketAddr>,
 }
 
 pub struct Toast {
@@ -115,9 +117,12 @@ pub struct GuiApp {
     pub gamepad_enabled: Arc<AtomicBool>,
     pub ca_override: Arc<Mutex<Option<Vec<u8>>>>,
     pub sni_override: Arc<Mutex<Option<String>>>,
-    pub pair_result: Arc<Mutex<Option<Result<(SocketAddr, Vec<u8>), String>>>>,
+    pub pair_result: Arc<Mutex<Option<Result<crate::PairedTarget, String>>>>,
     pub pair_signal_addr: String,
     pub pair_in_flight: bool,
+    pub device_list_result: Arc<Mutex<Option<Result<Vec<leeconnect::pair::OnlineDevice>, String>>>>,
+    pub device_refreshing: bool,
+    pub device_refresh_manual: bool,
     pub nat_probe_result: Arc<Mutex<Option<(leeconnect::ice::NatType, Option<SocketAddr>)>>>,
     pub nat_probing: bool,
     pub stun_server_input: String,
@@ -199,7 +204,8 @@ impl GuiApp {
             mumu: leeconnect::mumu::is_mumu_available(),
         };
 
-        Self {
+        let local_name = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "本机电脑".to_owned());
+        let mut app = Self {
             host,
             mode,
             slot: sess.slot,
@@ -222,6 +228,9 @@ impl GuiApp {
             pair_result: Arc::new(Mutex::new(None)),
             pair_signal_addr: leeconnect::pair::DEFAULT_SIGNAL.to_owned(),
             pair_in_flight: false,
+            device_list_result: Arc::new(Mutex::new(None)),
+            device_refreshing: false,
+            device_refresh_manual: false,
             nat_probe_result: Arc::new(Mutex::new(None)),
             nat_probing: false,
             stun_server_input: "223.5.5.5:3478".to_owned(),
@@ -237,22 +246,28 @@ impl GuiApp {
             selected_device: 1, // Default selected is "工位电脑"
             devices: vec![
                 DeviceRow {
-                    name: "DESKTOP-M2SOF0N".into(),
+                    name: local_name,
                     online: true,
                     kind: "本机",
                     addr: SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), super::DEFAULT_HOST),
+                    device_id: None,
+                    public_addr: None,
                 },
                 DeviceRow {
                     name: "工位电脑".into(),
                     online: true,
                     kind: "局域网 · 可连接",
                     addr: host,
+                    device_id: None,
+                    public_addr: None,
                 },
                 DeviceRow {
                     name: "LAPTOP-UJEGJK".into(),
                     online: false,
                     kind: "离线",
                     addr: SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 105)), super::DEFAULT_HOST),
+                    device_id: None,
+                    public_addr: None,
                 },
             ],
             palette,
@@ -299,7 +314,11 @@ impl GuiApp {
             test_step: 0,
             test_frame: 0,
             shot_saved: Arc::new(AtomicBool::new(false)),
+        };
+        if mode == AppMode::Normal {
+            app.refresh_devices(false);
         }
+        app
     }
 
     pub fn sync_texture(&mut self, ctx: &egui::Context) {
@@ -362,17 +381,61 @@ impl GuiApp {
 
     /// Drain host system-action results + completed pairing attempts into toasts.
     pub fn drain_sys_results(&mut self) {
+        let dev_list_res = self.device_list_result.lock().unwrap().take();
+        if let Some(res) = dev_list_res {
+            self.device_refreshing = false;
+            let manual = self.device_refresh_manual;
+            self.device_refresh_manual = false;
+            match res {
+                Ok(list) => {
+                    if let Some(self_row) = self.devices.first().cloned() {
+                        let mut next = vec![self_row];
+                        for d in list {
+                            let kind = if d.public_endpoint.is_some() {
+                                "在线 · P2P/中继"
+                            } else {
+                                "在线 · 局域网"
+                            };
+                            next.push(DeviceRow {
+                                name: d.name,
+                                online: true,
+                                kind,
+                                addr: d.lan_endpoint.unwrap_or(self.host),
+                                device_id: Some(d.device_id),
+                                public_addr: d.public_endpoint,
+                            });
+                        }
+                        self.devices = next;
+                        if self.devices.len() > 1 && self.selected_device == 0 {
+                            self.selected_device = 1;
+                        } else if self.selected_device >= self.devices.len() {
+                            self.selected_device = self.devices.len().saturating_sub(1);
+                        }
+                        if manual {
+                            self.push_toast(
+                                "设备列表已刷新",
+                                &format!("发现 {} 台在线设备", self.devices.len().saturating_sub(1)),
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    if manual {
+                        self.push_toast("刷新设备失败", &e);
+                    }
+                }
+            }
+        }
         let pair_res = self.pair_result.lock().unwrap().take();
         if let Some(res) = pair_res {
             self.pair_in_flight = false;
             match res {
-                Ok((addr, ca)) => {
+                Ok(pt) => {
+                    let display_addr = pt.outcome.public_endpoint.unwrap_or(pt.outcome.lan_endpoint);
                     self.show_pair_modal = false;
                     self.pair_code_input.clear();
-                    *self.ca_override.lock().unwrap() = Some(ca);
-                    *self.sni_override.lock().unwrap() = Some(addr.ip().to_string());
-                    self.connect_addr(addr);
-                    self.push_toast("配对成功", &format!("正在连接至 {addr}"));
+                    self.start_session_inner(display_addr, Some(pt));
+                    self.push_toast("配对成功", &format!("正在连接至 {display_addr}（支持 P2P / 中继）"));
                 }
                 Err(e) => {
                     self.push_toast("配对失败", &e);
@@ -415,6 +478,25 @@ impl GuiApp {
     }
 
     /// Start async pairing code redemption against `signaling.js`.
+    pub fn refresh_devices(&mut self, manual: bool) {
+        if self.device_refreshing {
+            return;
+        }
+        self.device_refreshing = true;
+        self.device_refresh_manual = manual;
+        let signal = self.pair_signal_addr.clone();
+        let out = self.device_list_result.clone();
+        std::thread::spawn(move || {
+            let res = (|| -> anyhow::Result<Vec<leeconnect::pair::OnlineDevice>> {
+                let mut sig = leeconnect::pair::Signaling::open(&signal)?;
+                let serial = leeconnect::pair::gen_serial(leeconnect::pair::DEFAULT_SECRET, "LEE-CTRL-GUI");
+                sig.register("LEE-CTRL-GUI", &serial, "lee-ctrl-gui", "", &[])?;
+                sig.list_devices(None)
+            })();
+            *out.lock().unwrap() = Some(res.map_err(|e| e.to_string()));
+        });
+    }
+
     pub fn redeem_pair_code(&mut self) {
         if self.pair_in_flight || self.pair_code_input.len() != 6 {
             return;
@@ -422,13 +504,19 @@ impl GuiApp {
         self.pair_in_flight = true;
         let code = self.pair_code_input.clone();
         let signal = self.pair_signal_addr.clone();
+        let stun_addr = leeconnect::ice::resolve_stun(&self.stun_server_input);
         let out = self.pair_result.clone();
         std::thread::spawn(move || {
-            let res = (|| -> anyhow::Result<(SocketAddr, Vec<u8>)> {
+            let res = (|| -> anyhow::Result<crate::PairedTarget> {
                 let mut sig = leeconnect::pair::Signaling::open(&signal)?;
                 let serial = leeconnect::pair::gen_serial(leeconnect::pair::DEFAULT_SECRET, "LEE-CTRL-GUI");
                 sig.register("LEE-CTRL-GUI", &serial, "lee-ctrl-gui", "", &[])?;
-                sig.pair_redeem(&code)
+                let outcome = sig.pair_redeem_full(&code)?;
+                Ok(crate::PairedTarget {
+                    sig,
+                    outcome,
+                    stun_addr,
+                })
             })();
             *out.lock().unwrap() = Some(res.map_err(|e| e.to_string()));
         });
@@ -487,11 +575,50 @@ impl GuiApp {
     pub fn connect_to_selected(&mut self) {
         *self.ca_override.lock().unwrap() = None;
         *self.sni_override.lock().unwrap() = None;
-        let target_addr = self.devices.get(self.selected_device).map(|d| d.addr).unwrap_or(self.host);
-        self.connect_addr(target_addr);
+        let selected = self.devices.get(self.selected_device).cloned();
+        if let Some(dev) = selected {
+            if let Some(target_id) = dev.device_id {
+                if self.pair_in_flight {
+                    return;
+                }
+                self.pair_in_flight = true;
+                let signal = self.pair_signal_addr.clone();
+                let stun_addr = leeconnect::ice::resolve_stun(&self.stun_server_input);
+                let out = self.pair_result.clone();
+                std::thread::spawn(move || {
+                    let res = (|| -> anyhow::Result<crate::PairedTarget> {
+                        let mut sig = leeconnect::pair::Signaling::open(&signal)?;
+                        let serial = leeconnect::pair::gen_serial(
+                            leeconnect::pair::DEFAULT_SECRET,
+                            "LEE-CTRL-GUI",
+                        );
+                        sig.register("LEE-CTRL-GUI", &serial, "lee-ctrl-gui", "", &[])?;
+                        let outcome = sig.connect_device(&target_id)?;
+                        Ok(crate::PairedTarget {
+                            sig,
+                            outcome,
+                            stun_addr,
+                        })
+                    })();
+                    *out.lock().unwrap() = Some(res.map_err(|e| e.to_string()));
+                });
+                return;
+            }
+            self.connect_addr(dev.addr);
+            return;
+        }
+        self.connect_addr(self.host);
     }
 
     pub fn connect_addr(&mut self, target_addr: SocketAddr) {
+        self.start_session_inner(target_addr, None);
+    }
+
+    pub fn start_session_inner(
+        &mut self,
+        target_addr: SocketAddr,
+        paired_target: Option<crate::PairedTarget>,
+    ) {
         self.stop.store(true, Ordering::Relaxed);
         self.tex = None;
         self.last_seq = 0;
@@ -544,6 +671,7 @@ impl GuiApp {
             self.gamepad_enabled.clone(),
             ca_der,
             sni,
+            paired_target,
         );
     }
 
@@ -764,12 +892,30 @@ impl GuiApp {
 
         inner_ui.set_width((width - 20.0).max(10.0));
         inner_ui.vertical(|ui| {
-            // Section 1: 「我的设备」
-            ui.label(
-                egui::RichText::new("我的设备")
-                    .font(theme::semibold_font(11.0))
-                    .color(p.text_3),
-            );
+            // Section 1: 「我的设备」 + 刷新按钮
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("我的设备")
+                        .font(theme::semibold_font(11.0))
+                        .color(p.text_3),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let label = if self.device_refreshing { "刷新中…" } else { "刷新" };
+                    if ui
+                        .add(
+                            egui::Label::new(
+                                egui::RichText::new(label)
+                                    .font(theme::text_font(11.0))
+                                    .color(p.accent),
+                            )
+                            .sense(Sense::click()),
+                        )
+                        .clicked()
+                    {
+                        self.refresh_devices(true);
+                    }
+                });
+            });
             ui.add_space(4.0);
 
             let query = self.search_query.to_lowercase();

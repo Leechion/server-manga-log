@@ -11,7 +11,8 @@ use anyhow::{bail, Context, Result};
 use hmac::{Hmac, Mac};
 use serde_json::Value;
 use sha2::Sha256;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs, UdpSocket};
+use std::time::Duration;
 use tungstenite::{connect, Message, WebSocket};
 
 pub const DEFAULT_SECRET: &str = "[SECRET]";
@@ -82,10 +83,28 @@ pub fn from_hex(s: &str) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Result of redeeming a 6-digit pairing code or connecting by device_id.
+#[derive(Debug, Clone)]
+pub struct PairOutcome {
+    pub lan_endpoint: SocketAddr,
+    pub public_endpoint: Option<SocketAddr>,
+    pub ca_der: Vec<u8>,
+}
+
+/// Online host entry returned by `signaling.js` `device_list`.
+#[derive(Debug, Clone)]
+pub struct OnlineDevice {
+    pub device_id: String,
+    pub name: String,
+    pub lan_endpoint: Option<SocketAddr>,
+    pub public_endpoint: Option<SocketAddr>,
+}
+
 /// Thin blocking WS session against signaling.js.
 pub struct Signaling {
     ws: WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
     pub device_id: String,
+    signal_host: String,
 }
 
 impl Signaling {
@@ -97,7 +116,21 @@ impl Signaling {
         if let MaybeTlsStream::Plain(s) = ws.get_mut() {
             let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(5)));
         }
-        Ok(Self { ws, device_id: String::new() })
+        let signal_host = signal
+            .rsplit_once(':')
+            .map(|(h, _)| h)
+            .unwrap_or(signal)
+            .trim_matches(|c| c == '[' || c == ']')
+            .to_owned();
+        Ok(Self {
+            ws,
+            device_id: String::new(),
+            signal_host,
+        })
+    }
+
+    pub fn signal_host(&self) -> &str {
+        &self.signal_host
     }
 
     fn send_json(&mut self, v: &Value) -> Result<()> {
@@ -130,10 +163,28 @@ impl Signaling {
     /// Register this device with its QUIC endpoint + hex-encoded CA DER (host),
     /// or ("", "") for a controller.
     pub fn register(&mut self, device_id: &str, serial: &str, name: &str, endpoint: &str, ca_der: &[u8]) -> Result<()> {
+        self.register_with_public(device_id, serial, name, endpoint, None, ca_der)
+    }
+
+    /// Same as `register`, also publishing an optional STUN-discovered public `ip:port`.
+    pub fn register_with_public(
+        &mut self,
+        device_id: &str,
+        serial: &str,
+        name: &str,
+        endpoint: &str,
+        public_endpoint: Option<&str>,
+        ca_der: &[u8],
+    ) -> Result<()> {
         self.device_id = device_id.to_owned();
         self.send_json(&serde_json::json!({
-            "type": "register", "device_id": device_id, "serial": serial,
-            "name": name, "endpoint": endpoint, "ca": to_hex(ca_der)
+            "type": "register",
+            "device_id": device_id,
+            "serial": serial,
+            "name": name,
+            "endpoint": endpoint,
+            "public_endpoint": public_endpoint,
+            "ca": to_hex(ca_der)
         }))?;
         self.recv_reply("registered")?;
         Ok(())
@@ -149,27 +200,121 @@ impl Signaling {
             .context("pair_code missing")
     }
 
-    /// Ctrl: redeem code -> host QUIC endpoint + pinned CA DER from the host's
-    /// registration (so cross-machine works without shipping the file out-of-band).
-    pub fn pair_redeem(&mut self, code: &str) -> Result<(SocketAddr, Vec<u8>)> {
-        self.send_json(&serde_json::json!({
-            "type": "pair_redeem", "code": code, "controller_id": self.device_id
-        }))?;
-        let v = self.recv_reply("pair_ok")?;
+    fn parse_pair_ok(v: &Value) -> Result<PairOutcome> {
         let ep = v
             .get("endpoint")
             .and_then(|e| e.as_str())
             .with_context(|| format!("pair_ok missing endpoint: {v}"))?;
-        let addr = ep.parse().with_context(|| format!("bad endpoint {ep:?}"))?;
+        let lan_endpoint = ep.parse().with_context(|| format!("bad endpoint {ep:?}"))?;
+        let public_endpoint = v
+            .get("public_endpoint")
+            .and_then(|e| e.as_str())
+            .and_then(|s| s.parse::<SocketAddr>().ok());
         let ca_hex = v
             .get("ca")
             .and_then(|c| c.as_str())
             .with_context(|| format!("pair_ok missing ca: {v}"))?;
-        Ok((addr, from_hex(ca_hex)?))
+        Ok(PairOutcome {
+            lan_endpoint,
+            public_endpoint,
+            ca_der: from_hex(ca_hex)?,
+        })
+    }
+
+    /// Ctrl: redeem code -> host LAN endpoint, optional STUN public endpoint, + pinned CA DER.
+    pub fn pair_redeem_full(&mut self, code: &str) -> Result<PairOutcome> {
+        self.send_json(&serde_json::json!({
+            "type": "pair_redeem", "code": code, "controller_id": self.device_id
+        }))?;
+        let v = self.recv_reply("pair_ok")?;
+        Self::parse_pair_ok(&v)
+    }
+
+    /// Ctrl: query online host devices registered under `account` (default `"default"`).
+    pub fn list_devices(&mut self, account: Option<&str>) -> Result<Vec<OnlineDevice>> {
+        self.send_json(&serde_json::json!({
+            "type": "device_list",
+            "account": account.unwrap_or("default"),
+        }))?;
+        let v = self.recv_reply("device_list")?;
+        let arr = v
+            .get("devices")
+            .and_then(|d| d.as_array())
+            .context("device_list missing devices array")?;
+        let mut out = Vec::with_capacity(arr.len());
+        for item in arr {
+            let Some(device_id) = item.get("device_id").and_then(|x| x.as_str()) else {
+                continue;
+            };
+            let name = item
+                .get("name")
+                .and_then(|x| x.as_str())
+                .unwrap_or(device_id)
+                .to_owned();
+            let lan_endpoint = item
+                .get("endpoint")
+                .and_then(|x| x.as_str())
+                .and_then(|s| s.parse::<SocketAddr>().ok());
+            let public_endpoint = item
+                .get("public_endpoint")
+                .and_then(|x| x.as_str())
+                .and_then(|s| s.parse::<SocketAddr>().ok());
+            out.push(OnlineDevice {
+                device_id: device_id.to_owned(),
+                name,
+                lan_endpoint,
+                public_endpoint,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Ctrl: connect directly to an online host by `device_id` (no pairing code required).
+    pub fn connect_device(&mut self, target_id: &str) -> Result<PairOutcome> {
+        self.send_json(&serde_json::json!({
+            "type": "connect_device",
+            "target_id": target_id,
+            "controller_id": self.device_id,
+        }))?;
+        let v = self.recv_reply("pair_ok")?;
+        Self::parse_pair_ok(&v)
+    }
+
+    /// Ctrl: redeem code -> host QUIC endpoint + pinned CA DER from the host's
+    /// registration (so cross-machine works without shipping the file out-of-band).
+    pub fn pair_redeem(&mut self, code: &str) -> Result<(SocketAddr, Vec<u8>)> {
+        let out = self.pair_redeem_full(code)?;
+        Ok((out.lan_endpoint, out.ca_der))
     }
 
     pub fn heartbeat(&mut self) -> Result<()> {
         self.send_json(&serde_json::json!({ "type": "heartbeat" }))
+    }
+
+    /// Non-blocking / bounded-wait read for async server events (`pair_open`, `ice`, `relay_assign`).
+    pub fn recv_event(&mut self, timeout: Duration) -> Result<Option<Value>> {
+        use tungstenite::stream::MaybeTlsStream;
+        if let MaybeTlsStream::Plain(s) = self.ws.get_mut() {
+            let _ = s.set_read_timeout(Some(timeout));
+        }
+        let res = match self.ws.read() {
+            Ok(Message::Text(t)) => Ok(serde_json::from_str::<Value>(t.as_str()).ok()),
+            Ok(Message::Close(_)) => Err(anyhow::anyhow!("signaling closed")),
+            Ok(_) => Ok(None),
+            Err(tungstenite::Error::Io(ref e))
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(anyhow::anyhow!("ws read: {e}")),
+        };
+        if let MaybeTlsStream::Plain(s) = self.ws.get_mut() {
+            let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
+        }
+        res
     }
 
     /// Forward an ICE candidate blob to the paired peer via signaling.
@@ -177,14 +322,17 @@ impl Signaling {
         self.send_json(&serde_json::json!({ "type": "ice", "candidate": candidate }))
     }
 
-    /// Request a UDP relay assignment from signaling.js when direct NAT traversal fails.
-    pub fn relay_assign(&mut self) -> Result<(SocketAddr, String)> {
-        self.send_json(&serde_json::json!({ "type": "relay_assign" }))?;
-        let v = self.recv_reply("relay_assign")?;
-        let host = v
+    /// Resolve a `relay_assign` JSON payload into `(relay_addr, channel)`.
+    pub fn parse_relay_assign(&self, v: &Value) -> Result<(SocketAddr, String)> {
+        let raw_host = v
             .get("host")
             .and_then(|x| x.as_str())
-            .context("relay_assign missing host")?;
+            .unwrap_or("");
+        let host = if raw_host.is_empty() || raw_host == "0.0.0.0" {
+            self.signal_host.as_str()
+        } else {
+            raw_host
+        };
         let port = v
             .get("port")
             .and_then(|x| x.as_u64())
@@ -194,9 +342,73 @@ impl Signaling {
             .and_then(|x| x.as_str())
             .context("relay_assign missing channel")?
             .to_owned();
-        let addr: SocketAddr = format!("{host}:{port}").parse().context("bad relay addr")?;
+        let addr = format!("{host}:{port}")
+            .to_socket_addrs()
+            .context("resolve relay addr")?
+            .find(|a| a.is_ipv4())
+            .context("no ipv4 relay addr")?;
         Ok((addr, channel))
     }
+
+    /// Request a UDP relay assignment from signaling.js when direct NAT traversal fails.
+    pub fn relay_assign(&mut self) -> Result<(SocketAddr, String)> {
+        self.send_json(&serde_json::json!({ "type": "relay_assign" }))?;
+        let v = self.recv_reply("relay_assign")?;
+        self.parse_relay_assign(&v)
+    }
+}
+
+/// Connect to a paired host using automatic fallback:
+///   1) Direct LAN / public endpoint (`pair.lan_endpoint`, 2s timeout)
+///   2) STUN P2P hole-punching (`pair.public_endpoint`, 3s timeout)
+///   3) UDP Relay fallback (`signaling.relay_assign` + `RelayUdpBridge`, 5s timeout)
+pub async fn connect_paired(
+    sig: &mut Signaling,
+    pair: PairOutcome,
+    stun_addr: Option<SocketAddr>,
+) -> Result<(quinn::Connection, Option<crate::ice::RelayUdpBridge>, SocketAddr)> {
+    let udp_sock = UdpSocket::bind("0.0.0.0:0").context("bind ctrl udp")?;
+    let punch_sock = udp_sock.try_clone().context("clone ctrl udp")?;
+    let client = crate::transport::client_endpoint_with_socket(udp_sock, &pair.ca_der)?;
+
+    // 1. Direct LAN / direct endpoint
+    if let Ok(connecting) = client.connect(pair.lan_endpoint, crate::transport::SNI) {
+        if let Ok(Ok(conn)) = tokio::time::timeout(Duration::from_secs(2), connecting).await {
+            return Ok((conn, None, pair.lan_endpoint));
+        }
+    }
+
+    // 2. STUN P2P hole-punching
+    if let Some(pub_ep) = pair.public_endpoint {
+        if pub_ep != pair.lan_endpoint {
+            let stun = stun_addr.or_else(|| crate::ice::resolve_stun(crate::ice::DEFAULT_STUN_SERVER));
+            if let Some(s) = stun {
+                if let Ok(our_pub) =
+                    crate::ice::stun_probe_on_socket(&punch_sock, s, Duration::from_millis(800))
+                {
+                    let _ = sig.send_ice(&our_pub.to_string());
+                }
+            }
+            crate::ice::send_udp_punch(&punch_sock, pub_ep, 4);
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            if let Ok(connecting) = client.connect(pub_ep, crate::transport::SNI) {
+                if let Ok(Ok(conn)) = tokio::time::timeout(Duration::from_secs(3), connecting).await
+                {
+                    return Ok((conn, None, pub_ep));
+                }
+            }
+        }
+    }
+
+    // 3. UDP Relay fallback
+    let (relay_addr, channel) = sig.relay_assign()?;
+    let bridge = crate::ice::RelayUdpBridge::connect_client(relay_addr, &channel)?;
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    let connecting = client.connect(bridge.local_addr(), crate::transport::SNI)?;
+    let conn = tokio::time::timeout(Duration::from_secs(5), connecting)
+        .await
+        .context("relay QUIC handshake timeout")??;
+    Ok((conn, Some(bridge), relay_addr))
 }
 
 #[cfg(test)]

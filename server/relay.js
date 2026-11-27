@@ -21,15 +21,19 @@ sock.on('message', (msg, rinfo) => {
   if (type === 4) { // control: 注册/心跳
     let ep = sessions.get(channel);
     if (!ep) { ep = []; sessions.set(channel, ep); }
-    if (!ep.some(e => e.address === rinfo.address && e.port === rinfo.port)) {
+    const existing = ep.find(e => e.address === rinfo.address && e.port === rinfo.port);
+    if (existing) {
+      existing.ts = Date.now();
+    } else {
       if (ep.length >= 2) ep.shift();
       ep.push({ ...rinfo, ts: Date.now() });
     }
     return;
   }
   const ep = sessions.get(channel); if (!ep || ep.length < 2) return;
-  for (const peer of ep) if (!(peer.address === rinfo.address && peer.port === rinfo.port)) {
-    sock.send(msg, peer.port, peer.address);
+  for (const peer of ep) {
+    if (peer.address === rinfo.address && peer.port === rinfo.port) { peer.ts = Date.now(); }
+    else { sock.send(msg, peer.port, peer.address); }
   }
 });
 

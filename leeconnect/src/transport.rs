@@ -104,9 +104,33 @@ pub fn bind_server(addr: SocketAddr, cfg: ServerConfig) -> Result<Endpoint> {
     Endpoint::server(cfg, addr).context("bind server")
 }
 
+/// Bind a QUIC server endpoint onto an existing std `UdpSocket` (e.g. after STUN/hole-punching).
+pub fn bind_server_with_socket(sock: std::net::UdpSocket, cfg: ServerConfig) -> Result<Endpoint> {
+    Endpoint::new(
+        quinn::EndpointConfig::default(),
+        Some(cfg),
+        sock,
+        Arc::new(quinn::TokioRuntime),
+    )
+    .context("bind server with socket")
+}
+
 pub fn client_endpoint(ca_der: &[u8]) -> Result<Endpoint> {
     let mut ep =
         Endpoint::client(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)).context("bind client")?;
+    ep.set_default_client_config(gen_client_config(ca_der)?);
+    Ok(ep)
+}
+
+/// Bind a QUIC client endpoint onto an existing std `UdpSocket` (e.g. after STUN/hole-punching).
+pub fn client_endpoint_with_socket(sock: std::net::UdpSocket, ca_der: &[u8]) -> Result<Endpoint> {
+    let mut ep = Endpoint::new(
+        quinn::EndpointConfig::default(),
+        None,
+        sock,
+        Arc::new(quinn::TokioRuntime),
+    )
+    .context("bind client with socket")?;
     ep.set_default_client_config(gen_client_config(ca_der)?);
     Ok(ep)
 }

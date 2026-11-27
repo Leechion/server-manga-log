@@ -98,6 +98,12 @@ pub enum Status {
     Closed,
 }
 
+pub struct PairedTarget {
+    pub sig: leeconnect::pair::Signaling,
+    pub outcome: leeconnect::pair::PairOutcome,
+    pub stun_addr: Option<SocketAddr>,
+}
+
 pub struct Session {
     pub slot: Arc<Mutex<FrameSlot>>,
     pub status: Arc<Mutex<Status>>,
@@ -144,6 +150,7 @@ impl Session {
         gamepad_enabled: Arc<AtomicBool>,
         ca_der: Option<Vec<u8>>,
         sni: Option<String>,
+        paired_target: Option<PairedTarget>,
     ) {
         std::thread::spawn(move || {
             let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
@@ -176,6 +183,7 @@ impl Session {
                 gamepad_enabled,
                 ca_der,
                 sni,
+                paired_target,
             )) {
                 let err_msg = e.to_string();
                 eprintln!("[gui-session] ended: {err_msg}");
@@ -208,6 +216,7 @@ async fn run(
     gamepad_enabled: Arc<AtomicBool>,
     ca_override: Option<Vec<u8>>,
     sni_override: Option<String>,
+    paired_target: Option<PairedTarget>,
 ) -> Result<()> {
     // 1. Stage: Handshake
     let t0 = Instant::now();
@@ -217,31 +226,38 @@ async fn run(
         done: Vec::new(),
     };
 
-    let ca = match ca_override {
-        Some(c) if !c.is_empty() => c,
-        _ => match transport::load_ca() {
-            Ok(ca) => ca,
-            Err(e) => {
-                if let Ok(ca) = std::fs::read("leeconnect/target/leeconnect-ca.der") {
-                    ca
-                } else {
-                    anyhow::bail!("CA 根证书不存在 ({e})，请先启动 host 服务生成证书");
+    let (_relay_bridge, conn) = if let Some(mut pt) = paired_target {
+        let (conn, bridge, _via) =
+            leeconnect::pair::connect_paired(&mut pt.sig, pt.outcome, pt.stun_addr).await?;
+        (bridge, conn)
+    } else {
+        let ca = match ca_override {
+            Some(c) if !c.is_empty() => c,
+            _ => match transport::load_ca() {
+                Ok(ca) => ca,
+                Err(e) => {
+                    if let Ok(ca) = std::fs::read("leeconnect/target/leeconnect-ca.der") {
+                        ca
+                    } else {
+                        anyhow::bail!("CA 根证书不存在 ({e})，请先启动 host 服务生成证书");
+                    }
                 }
-            }
-        },
-    };
-    let sni = sni_override.unwrap_or_else(|| transport::SNI.to_owned());
-    let client = transport::client_endpoint(&ca)?;
-    let conn = match client.connect(host, &sni) {
-        Ok(c) => match c.await {
-            Ok(conn) => conn,
+            },
+        };
+        let sni = sni_override.unwrap_or_else(|| transport::SNI.to_owned());
+        let client = transport::client_endpoint(&ca)?;
+        let conn = match client.connect(host, &sni) {
+            Ok(c) => match c.await {
+                Ok(conn) => conn,
+                Err(e) => {
+                    anyhow::bail!("握手失败 {host}: {e}");
+                }
+            },
             Err(e) => {
-                anyhow::bail!("握手失败 {host}: {e}");
+                anyhow::bail!("连接端点错误 {host}: {e}");
             }
-        },
-        Err(e) => {
-            anyhow::bail!("连接端点错误 {host}: {e}");
-        }
+        };
+        (None, conn)
     };
 
     let handshake_dur = t0.elapsed();
@@ -591,6 +607,19 @@ pub fn bgra_to_rgba_into(bgra: &[u8], out: &mut Vec<u8>) {
     }
 }
 
+fn load_app_icon() -> Arc<egui::IconData> {
+    let png_bytes = include_bytes!("../../../assets/icons/app-256.png");
+    let img = image::load_from_memory(png_bytes)
+        .expect("decode embedded app-256.png")
+        .into_rgba8();
+    let (width, height) = img.dimensions();
+    Arc::new(egui::IconData {
+        rgba: img.into_raw(),
+        width,
+        height,
+    })
+}
+
 fn main() -> eframe::Result {
     let mut host_arg: Option<String> = None;
     let mut mode = app::AppMode::Normal;
@@ -663,6 +692,7 @@ fn main() -> eframe::Result {
             gamepad_enabled.clone(),
             None,
             None,
+            None,
         );
     }
 
@@ -691,7 +721,8 @@ fn main() -> eframe::Result {
             .with_decorations(false)
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([960.0, 600.0])
-            .with_title("LeeConnect"),
+            .with_title("LeeConnect")
+            .with_icon(load_app_icon()),
         ..Default::default()
     };
     eframe::run_native(
